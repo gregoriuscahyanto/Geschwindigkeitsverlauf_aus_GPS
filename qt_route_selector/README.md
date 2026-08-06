@@ -1,37 +1,23 @@
-# Qt-Routenauswahl und vollständig lokales Python-Routing
+# Qt-Routenauswahl mit Online-OSM und Offline-Fallback
 
-Die Anwendung ersetzt den bisherigen manuellen Weg über die GraphHopper-Webseite und eine heruntergeladene GPX-Datei. Karte, Start-/Zielauswahl, Routing und OSM-Auswertung laufen ohne lokalen Server und ohne Internetverbindung.
+Die Anwendung ersetzt den manuellen Weg über die GraphHopper-Webseite und eine heruntergeladene GPX-Datei. Routing und OSM-Auswertung laufen lokal in Python. Für die Kartenanzeige wird standardmäßig die Online-Karte von OpenStreetMap verwendet; wenn sie nicht erreichbar ist, schaltet der Modus **Automatisch** auf die lokale Vektorkarte um.
 
 ## Funktionsumfang
 
 - native Oberfläche mit PySide6/QML
-- eigener Qt-Vektorrenderer ohne QtLocation-Kachelserver
-- verschiebbare und zoombare Offline-Karte aus lokalen OSM-Straßendaten
-- Start- und Zielauswahl per Mausklick
-- automatische, gepufferte Bounding Box für die Routingregion
-- lokales Routing ohne GraphHopper-, OSRM- oder Valhalla-Server
-- Unterstützung für FlatGeobuf, GeoPackage, GeoJSON, Shapefile und als langsamere Fallback-Quelle OSM PBF
-- Berücksichtigung von Einbahnstraßen und einfachen OSM-Zugriffsbeschränkungen
-- zeitgewichtetes Routing anhand von `maxspeed` bzw. Straßenklassen-Standardwerten
-- Anzeige der Route und gefundener Ampeln
-- Export als `route_result.json`
-
-## Was für den Offline-Betrieb benötigt wird
-
-- Python 3.11 (64 Bit)
-- die virtuelle Python-Umgebung aus `qt_route_selector/requirements.txt`
-- eine lokale `.osm.pbf`, `.fgb` oder `.gpkg`
-
-Nicht benötigt werden:
-
-- Internetzugriff
-- API-Key
-- GraphHopper-/OSRM-/Valhalla-Server
-- Java
-- Docker
-- heruntergeladene Kartenkacheln
-
-Die Kartenansicht zeichnet die Straßen direkt aus der lokalen OSM-Datenquelle. Es werden keine HTTP-Anfragen für die Karte ausgeführt.
+- Online-OSM als schnelle Standardkarte, ohne API-Key
+- automatischer Fallback auf die vollständig lokale Vektorkarte
+- manuelle Auswahl zwischen `Automatisch`, `Online OSM` und `Komplett offline`
+- Start, beliebig viele Zwischenziele und Ziel per Mausklick
+- lokale Routenberechnung ohne GraphHopper-, OSRM- oder Valhalla-Server
+- drei Routingprofile:
+  - **Hauptstraßen bevorzugen**: Autobahn, Bundesstraße, Landstraße, regionale Straße, Seitenstraße
+  - **Schnellste Route**: reine OSM-Fahrzeit
+  - **Kürzeste Route**: reine Entfernung
+- Berücksichtigung von Einbahnstraßen, Kreisverkehren und einfachen Zufahrtsregeln
+- Anzeige von Route und gefundenen Ampeln
+- Export als `selected_region.json` und `route_result.json`
+- wiederverwendbarer Graph-Cache für erneute Routen in derselben Region
 
 ## Installation
 
@@ -43,109 +29,113 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r qt_route_selector\requirements.txt
 ```
 
+Nach einem Git-Update muss die virtuelle Umgebung nicht neu erstellt werden. Es reicht:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r qt_route_selector\requirements.txt
+```
+
 ## Anwendung starten
 
 ```powershell
 .\.venv\Scripts\python.exe qt_route_selector\main.py
 ```
 
-Danach:
+## Bedienung
 
-1. Über **Straßendaten wählen** eine lokale PBF-/FGB-/GeoPackage-Datei auswählen.
-2. Die Anwendung lädt automatisch die Straßen im aktuell sichtbaren Ausschnitt.
-3. Karte mit gedrückter linker Maustaste verschieben und mit dem Mausrad zoomen.
-4. Nach größeren Kartenbewegungen **Kartenausschnitt laden** anklicken.
-5. Startpunkt anklicken.
-6. Zielpunkt anklicken.
-7. **Route berechnen** anklicken.
+1. Die Online-OSM-Karte erscheint standardmäßig sofort.
+2. Startpunkt anklicken.
+3. Weitere Punkte in Fahrreihenfolge anklicken. Der erste Punkt ist der Start, der letzte Punkt das Ziel, alle Punkte dazwischen sind Zwischenziele.
+4. Über **Straßendaten wählen** eine lokale `.osm.pbf`, `.gpkg`, `.fgb`, `.geojson` oder `.shp` auswählen.
+5. Routingprofil auswählen.
+6. **Route berechnen** anklicken.
 
-## Wahl der Straßendaten
+Mit **Letzten Punkt entfernen** lässt sich die Klickfolge korrigieren.
 
-### Empfohlen: FlatGeobuf oder GeoPackage
+## Warum das direkte PBF-Lesen langsam ist
 
-Für wiederholte Routen ist ein räumlich indiziertes Format deutlich schneller als das wiederholte Lesen einer großen PBF-Datei. Das vorhandene Skript kann eine PBF vorbereiten:
+Eine OSM-PBF ist kompakt und ideal als Austauschformat. Sie besitzt aber keinen räumlichen Index für schnelle beliebige Kartenausschnitte. Beim direkten Lesen kann GDAL deshalb große Teile der Datei sequenziell durchsuchen. Das betrifft sowohl die lokale Kartenanzeige als auch den ersten Aufbau des Routinggraphen.
 
-```powershell
-.\.venv\Scripts\python.exe build_highways_fgb_v2.py `
-  --in_pbf "C:\Daten\region.osm.pbf" `
-  --out_fgb "C:\Daten\region_highways.fgb" `
-  --tiles 8x8
+Die Online-Hintergrundkarte ist davon nicht betroffen. Verschieben und Zoomen funktionieren dort unabhängig von der PBF schnell.
+
+## Empfohlen: PBF-Schnellindex
+
+Nach Auswahl einer PBF erscheint die Schaltfläche **PBF-Schnellindex erstellen**. Sie erzeugt einmalig neben der PBF eine Datei wie:
+
+```text
+baden-wuerttemberg-260805_routing.gpkg
 ```
 
-Danach in der Qt-Anwendung `region_highways.fgb` auswählen.
+Die Konvertierung verwendet Pyosmium und liest die PBF nur einmal. Das GeoPackage enthält:
 
-### Direkt: `.osm.pbf`
+- befahrbare Straßen mit relevanten OSM-Tags
+- räumlichen Index
+- Ampeln in einer separaten Ebene
 
-Eine PBF-Datei kann direkt ausgewählt werden. Die Anwendung liest für Karte und Route nur Objekte, die den jeweiligen Kartenausschnitt bzw. die Routing-Bounding-Box schneiden.
+Nach Abschluss aktiviert die Anwendung das GeoPackage automatisch. Weitere Karten- und Routingabfragen sind dann wesentlich schneller. Wird später dieselbe PBF erneut gewählt und ein aktueller Schnellindex liegt daneben, verwendet die Anwendung ihn automatisch.
 
-OSM PBF ist intern dennoch ein sequenzielles Format. Bei einer sehr großen Länderdatei kann das Laden eines Ausschnitts deshalb wesentlich länger dauern als mit FlatGeobuf oder GeoPackage.
+## Kartenmodi
 
-Die direkte PBF-Unterstützung hängt davon ab, ob der von Pyogrio verwendete GDAL-Build den OSM-Treiber enthält. Falls das Lesen der PBF fehlschlägt, zuerst mit `build_highways_fgb_v2.py` eine FGB-Datei erzeugen.
+### Automatisch
 
-## Offline-Kartenrenderer
+Die Anwendung startet mit Online-OSM. Ein kurzer Verbindungstest und Qt-Kartenfehler führen bei Nichterreichbarkeit zum Offline-Fallback. Die Erreichbarkeit wird in größeren Abständen erneut geprüft.
 
-Der Renderer befindet sich in `offline_map.py` und verwendet Web-Mercator nur für die Bildschirmprojektion. Gerendert werden aktuell:
+### Online OSM
 
-- Straßen, farblich und nach Breite anhand der OSM-Straßenklasse
-- Start- und Zielmarker
-- Routingregion
-- berechnete Route
-- Ampelmarker
-- Maßstabsbalken
-- OSM-Attribution
+Erzwingt die Online-Karte. Das lokale Routing verwendet weiterhin ausschließlich deine lokale Straßendatei.
 
-Der sichtbare Straßenbestand wird räumlich begrenzt und leicht vereinfacht. Bei extrem dichten Ausschnitten wird die Darstellung aus Speicher- und Performancegründen begrenzt; die eigentliche Routenberechnung arbeitet trotzdem mit dem vollständig geladenen Routingausschnitt.
+### Komplett offline
+
+Verwendet den nativen Qt-Vektorrenderer. Bei GeoPackage/FGB wird der sichtbare Ausschnitt nach einer kurzen Pause automatisch nachgeladen. Kleine Kartenbewegungen verwenden einen vergrößerten In-Memory-Cache. Bei einer direkten PBF ist automatisches Nachladen deaktiviert, damit nicht nach jeder Bewegung ein langer PBF-Scan beginnt; hier sollte der Schnellindex erstellt werden.
+
+## Straßenpriorisierung
+
+Das Standardprofil **Hauptstraßen bevorzugen** verwendet eine moderate Gewichtung. Die Rangfolge lautet:
+
+1. Autobahn (`motorway`, Referenz `A`)
+2. Bundesstraße (Referenz `B`, typischerweise `trunk`/`primary`)
+3. Landstraße (Referenz `L`)
+4. Kreis- und regionale Straßen (`K`, `secondary`, `tertiary`)
+5. unklassifizierte und Wohnstraßen
+6. verkehrsberuhigte Bereiche und Servicewege
+
+Die Gewichtung bevorzugt Hauptstraßen, erzwingt aber keine extremen Umwege. Für eine rein zeitbasierte Entscheidung kann auf **Schnellste Route** gewechselt werden.
 
 ## Ausgabedateien
 
 ### `selected_region.json`
 
-Enthält:
-
-- Start- und Zielkoordinate
-- westliche, südliche, östliche und nördliche Grenze
-- Sicherheitsrand
-- gewählte Straßendatei
+Enthält alle gewählten GPS-Punkte, die gepufferte Arbeitsregion und die gewählte Straßendatei.
 
 ### `route_result.json`
 
 Enthält:
 
 - Routengeometrie als GPS-Koordinaten
-- Segmentlängen
-- vorläufige Fahrzeiten
+- Teilstrecken zwischen den gewählten Punkten
+- Segmentlängen und vorläufige Fahrzeiten
 - `maxspeed_kmh`
-- `highway`
-- `surface`
-- Straßenname und Referenz
-- Einbahnstraßeninformation
+- `highway`, Straßenkategorie und Prioritätsfaktor
+- `surface`, Straßenname, Referenz und Einbahnstraßeninformation
 - Ampelpositionen und deren Entfernung vom Routenstart
-- Statistik über den aufgebauten Routinggraphen
+- Routingprofil und Graph-Cache-Status
 
-Diese Datei kann direkt als Eingang für das Fahrer-, Kurven- und Geschwindigkeitsmodell verwendet werden.
+Diese Daten können direkt in das Fahrer-, Kurven- und Geschwindigkeitsmodell übernommen werden.
 
-## Tests ausführen
+## Tests
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s qt_route_selector\tests -v
 ```
 
-Die Tests prüfen unter anderem:
+## Grenzen des aktuellen Routers
 
-- OSM-Geschwindigkeitswerte
-- OSM-Zusatztags
-- Einbahnstraßen
-- zusammenhängendes Routing
-- Vorwärts-/Rückwärtsumrechnung der Kartenprojektion
-
-## Wichtige Grenzen des aktuellen Routers
-
-Der Router ist als nachvollziehbarer Forschungs- und Simulationsbaustein gedacht, nicht als vollständiges Navigationssystem. Derzeit werden unter anderem noch nicht ausgewertet:
+Der Router ist ein nachvollziehbarer Forschungs- und Simulationsbaustein, kein vollständiges Navigationssystem. Noch nicht ausgewertet werden unter anderem:
 
 - OSM-Abbiegebeschränkungen aus Relationen
 - zeitabhängige Zufahrtsregeln
-- Fahrzeughöhe, Fahrzeuggewicht und Gefahrgutregeln
+- Fahrzeughöhe, Gewicht und Gefahrgutregeln
 - detaillierte Kreuzungs- und Abbiegekosten
 - Fahrspuren und Spurwechsel
 
-Die Karte zeigt derzeit primär Straßen. Gebäude, Gewässer, Wälder und weitere Flächennutzungen können später als zusätzliche lokale Vektorlayer ergänzt werden.
+Die lokale Fallback-Karte zeichnet derzeit Straßen, Route, Punkte und Ampeln, aber noch keine vollständige kartografische Basiskarte mit Gebäuden, Gewässern und Landnutzung.
