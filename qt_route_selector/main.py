@@ -6,62 +6,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import (
-    QAbstractListModel,
-    QModelIndex,
-    QObject,
-    Property,
-    QSettings,
-    QThread,
-    Qt,
-    Signal,
-    Slot,
-)
-from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtCore import QObject, Property, QSettings, QThread, Signal, Slot
+from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from local_router import RoutingError, calculate_route
-
-
-class TrafficSignalModel(QAbstractListModel):
-    LatitudeRole = Qt.ItemDataRole.UserRole + 1
-    LongitudeRole = Qt.ItemDataRole.UserRole + 2
-    DistanceRole = Qt.ItemDataRole.UserRole + 3
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._points: list[dict[str, float]] = []
-
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return 0 if parent.isValid() else len(self._points)
-
-    def data(
-        self,
-        index: QModelIndex,
-        role: int = Qt.ItemDataRole.DisplayRole,
-    ) -> Any:
-        if not index.isValid() or not 0 <= index.row() < len(self._points):
-            return None
-        point = self._points[index.row()]
-        if role == self.LatitudeRole:
-            return point["latitude"]
-        if role == self.LongitudeRole:
-            return point["longitude"]
-        if role == self.DistanceRole:
-            return point["distance_from_start_m"]
-        return None
-
-    def roleNames(self) -> dict[int, bytes]:
-        return {
-            self.LatitudeRole: b"latitude",
-            self.LongitudeRole: b"longitude",
-            self.DistanceRole: b"distanceFromStartM",
-        }
-
-    def set_points(self, points: list[dict[str, float]]) -> None:
-        self.beginResetModel()
-        self._points = points
-        self.endResetModel()
+from map_data import load_map_features
+from offline_map import OfflineMapItem
 
 
 class RoutingWorker(QObject):
@@ -92,8 +43,36 @@ class RoutingWorker(QObject):
             )
         except RoutingError as exc:
             self.failed.emit(str(exc))
-        except Exception as exc:  # Keep the GUI alive for unexpected data errors.
+        except Exception as exc:
             self.failed.emit(f"Unerwarteter Routingfehler: {exc}")
+        else:
+            self.finished.emit(result)
+
+
+class MapDataWorker(QObject):
+    finished = Signal("QVariantMap")
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        roads_path: str,
+        bbox: dict[str, float],
+    ) -> None:
+        super().__init__()
+        self.roads_path = roads_path
+        self.bbox = bbox
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = load_map_features(
+                roads_path=self.roads_path,
+                bbox=self.bbox,
+            )
+        except RoutingError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:
+            self.failed.emit(f"Kartendaten konnten nicht geladen werden: {exc}")
         else:
             self.finished.emit(result)
 
@@ -101,21 +80,23 @@ class RoutingWorker(QObject):
 class RouteSelector(QObject):
     selectionChanged = Signal("QVariantMap")
     routeChanged = Signal("QVariantList")
+    signalsChanged = Signal("QVariantList")
     summaryChanged = Signal("QVariantMap")
+    mapRoadsChanged = Signal("QVariantList")
+    mapSummaryChanged = Signal("QVariantMap")
     statusChanged = Signal(str)
     roadsFileChanged = Signal()
     busyChanged = Signal()
 
-    def __init__(self, traffic_signal_model: TrafficSignalModel) -> None:
+    def __init__(self) -> None:
         super().__init__()
         self.points: list[tuple[float, float]] = []
         self.current_bbox: dict[str, float] | None = None
-        self.traffic_signal_model = traffic_signal_model
         self.settings = QSettings("GPSDrivingSimulation", "QtRouteSelector")
         self._roads_file = str(self.settings.value("roads_file", "") or "")
         self._busy = False
         self._thread: QThread | None = None
-        self._worker: RoutingWorker | None = None
+        self._worker: QObject | None = None
 
     @Property(str, notify=roadsFileChanged)
     def roadsFile(self) -> str:
@@ -170,8 +151,30 @@ class RouteSelector(QObject):
 
     def _clear_route_display(self) -> None:
         self.routeChanged.emit([])
-        self.traffic_signal_model.set_points([])
+        self.signalsChanged.emit([])
         self.summaryChanged.emit({})
+
+    def _start_thread(
+        self,
+        worker: QObject,
+        finished_signal: Signal,
+        finished_slot: Any,
+        failed_signal: Signal,
+        failed_slot: Any,
+    ) -> None:
+        self._thread = QThread(self)
+        self._worker = worker
+        worker.moveToThread(self._thread)
+        self._thread.started.connect(worker.run)  # type: ignore[attr-defined]
+        finished_signal.connect(finished_slot)
+        failed_signal.connect(failed_slot)
+        finished_signal.connect(worker.deleteLater)
+        failed_signal.connect(worker.deleteLater)
+        finished_signal.connect(self._thread.quit)
+        failed_signal.connect(self._thread.quit)
+        self._thread.finished.connect(self._thread.deleteLater)
+        self._thread.finished.connect(self._worker_cleanup)
+        self._thread.start()
 
     @Slot(float, float)
     def selectPoint(self, lat: float, lon: float) -> None:
@@ -191,7 +194,7 @@ class RouteSelector(QObject):
                 encoding="utf-8",
             )
             self.statusChanged.emit(
-                "Start und Ziel gewählt. Straßendatei auswählen und Route berechnen."
+                "Start und Ziel gewählt – Route kann lokal berechnet werden."
             )
         else:
             self.statusChanged.emit("Start gewählt – jetzt den Zielpunkt anklicken.")
@@ -228,10 +231,36 @@ class RouteSelector(QObject):
         self.selectionChanged.emit(self._selection_payload())
         if self._roads_file.lower().endswith((".osm.pbf", ".pbf")):
             self.statusChanged.emit(
-                "OSM-PBF gewählt. Direktes Lesen ist möglich, für wiederholte Routen ist FGB schneller."
+                "OSM-PBF gewählt – der sichtbare Ausschnitt wird lokal eingelesen."
             )
         else:
             self.statusChanged.emit(f"Straßendatei gewählt: {Path(selected).name}")
+
+    @Slot("QVariantMap")
+    def loadRoadMap(self, bbox: dict[str, float]) -> None:
+        if self._busy:
+            return
+        if not self._roads_file:
+            self.statusChanged.emit("Bitte zuerst lokale Straßendaten auswählen.")
+            return
+        if not Path(self._roads_file).is_file():
+            self.statusChanged.emit("Die gespeicherte Straßendatei wurde nicht gefunden.")
+            return
+        required = {"west", "south", "east", "north"}
+        if not bbox or not required.issubset(bbox):
+            self.statusChanged.emit("Der sichtbare Kartenausschnitt ist ungültig.")
+            return
+
+        self._set_busy(True)
+        self.statusChanged.emit("Lokale Straßen für den sichtbaren Ausschnitt werden geladen …")
+        worker = MapDataWorker(self._roads_file, dict(bbox))
+        self._start_thread(
+            worker,
+            worker.finished,
+            self._map_finished,
+            worker.failed,
+            self._map_failed,
+        )
 
     @Slot()
     def calculateRoute(self) -> None:
@@ -241,7 +270,7 @@ class RouteSelector(QObject):
             self.statusChanged.emit("Bitte zuerst Start und Ziel auf der Karte auswählen.")
             return
         if not self._roads_file:
-            self.statusChanged.emit("Bitte zuerst eine vorbereitete Straßendatei auswählen.")
+            self.statusChanged.emit("Bitte zuerst lokale Straßendaten auswählen.")
             return
         if not Path(self._roads_file).is_file():
             self.statusChanged.emit("Die gespeicherte Straßendatei wurde nicht gefunden.")
@@ -250,25 +279,37 @@ class RouteSelector(QObject):
         self._set_busy(True)
         self._clear_route_display()
         self.statusChanged.emit("Region wird geladen und Routinggraph wird aufgebaut …")
-
-        self._thread = QThread(self)
-        self._worker = RoutingWorker(
+        worker = RoutingWorker(
             self._roads_file,
             self.points[0],
             self.points[1],
             dict(self.current_bbox),
         )
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.finished.connect(self._route_finished)
-        self._worker.failed.connect(self._route_failed)
-        self._worker.finished.connect(self._worker.deleteLater)
-        self._worker.failed.connect(self._worker.deleteLater)
-        self._worker.finished.connect(self._thread.quit)
-        self._worker.failed.connect(self._thread.quit)
-        self._thread.finished.connect(self._thread.deleteLater)
-        self._thread.finished.connect(self._worker_cleanup)
-        self._thread.start()
+        self._start_thread(
+            worker,
+            worker.finished,
+            self._route_finished,
+            worker.failed,
+            self._route_failed,
+        )
+
+    @Slot("QVariantMap")
+    def _map_finished(self, result: dict[str, Any]) -> None:
+        features = result.get("features", [])
+        summary = result.get("summary", {})
+        self.mapRoadsChanged.emit(features)
+        self.mapSummaryChanged.emit(summary)
+        suffix = " (Anzeige begrenzt)" if summary.get("truncated") else ""
+        self.statusChanged.emit(
+            f"Offline-Karte geladen: {summary.get('display_lines', 0)} Linien, "
+            f"{summary.get('display_vertices', 0)} Punkte{suffix}."
+        )
+        self._set_busy(False)
+
+    @Slot(str)
+    def _map_failed(self, message: str) -> None:
+        self.statusChanged.emit(message)
+        self._set_busy(False)
 
     @Slot("QVariantMap")
     def _route_finished(self, result: dict[str, Any]) -> None:
@@ -281,7 +322,7 @@ class RouteSelector(QObject):
             encoding="utf-8",
         )
         self.routeChanged.emit(result.get("coordinates", []))
-        self.traffic_signal_model.set_points(result.get("traffic_signals", []))
+        self.signalsChanged.emit(result.get("traffic_signals", []))
         summary = result.get("summary", {})
         self.summaryChanged.emit(summary)
         self.statusChanged.emit(
@@ -306,11 +347,11 @@ def main() -> int:
     app.setApplicationName("GPS Route Selector")
     app.setOrganizationName("GPSDrivingSimulation")
 
+    qmlRegisterType(OfflineMapItem, "OfflineMap", 1, 0, "OfflineMapItem")
+
     engine = QQmlApplicationEngine()
-    traffic_signal_model = TrafficSignalModel()
-    selector = RouteSelector(traffic_signal_model)
+    selector = RouteSelector()
     engine.rootContext().setContextProperty("routeSelector", selector)
-    engine.rootContext().setContextProperty("trafficSignalModel", traffic_signal_model)
     engine.load(str(Path(__file__).with_name("main.qml")))
     if not engine.rootObjects():
         return 1
