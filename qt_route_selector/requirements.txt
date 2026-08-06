@@ -1,6 +1,7 @@
-# Environment for the Qt route selector, online/offline map and local routing.
+# Environment for the Qt route selector, live simulation and local routing.
 # Recommended Python version: 3.11 (64-bit).
 PySide6>=6.7
+pyqtgraph>=0.13.7
 numpy>=1.26
 pandas>=2.2
 networkx>=3.3
