@@ -24,9 +24,9 @@ from local_router import RoutingError, calculate_route
 
 
 class TrafficSignalModel(QAbstractListModel):
-    LatitudeRole = Qt.UserRole + 1
-    LongitudeRole = Qt.UserRole + 2
-    DistanceRole = Qt.UserRole + 3
+    LatitudeRole = Qt.ItemDataRole.UserRole + 1
+    LongitudeRole = Qt.ItemDataRole.UserRole + 2
+    DistanceRole = Qt.ItemDataRole.UserRole + 3
 
     def __init__(self) -> None:
         super().__init__()
@@ -35,7 +35,11 @@ class TrafficSignalModel(QAbstractListModel):
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._points)
 
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
+    def data(
+        self,
+        index: QModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> Any:
         if not index.isValid() or not 0 <= index.row() < len(self._points):
             return None
         point = self._points[index.row()]
@@ -143,8 +147,6 @@ class RouteSelector(QObject):
     @classmethod
     def bbox(cls, a: tuple[float, float], b: tuple[float, float]) -> dict[str, float]:
         distance_m = cls._air_distance_m(a, b)
-        # The routing corridor must contain realistic detours around rivers,
-        # restricted streets and motorway access points.
         margin_m = max(5_000.0, distance_m * 0.25)
         mean_latitude = math.radians((a[0] + b[0]) / 2.0)
         lat_margin = margin_m / 111_320.0
@@ -215,7 +217,8 @@ class RouteSelector(QObject):
             None,
             "Lokale Straßendaten auswählen",
             initial,
-            "Geodaten (*.fgb *.gpkg *.geojson *.shp);;Alle Dateien (*)",
+            "Routingdaten (*.fgb *.gpkg *.geojson *.shp *.osm.pbf *.pbf);;"
+            "OSM PBF (*.osm.pbf *.pbf);;Alle Dateien (*)",
         )
         if not selected:
             return
@@ -223,7 +226,12 @@ class RouteSelector(QObject):
         self.settings.setValue("roads_file", self._roads_file)
         self.roadsFileChanged.emit()
         self.selectionChanged.emit(self._selection_payload())
-        self.statusChanged.emit(f"Straßendatei gewählt: {Path(selected).name}")
+        if self._roads_file.lower().endswith((".osm.pbf", ".pbf")):
+            self.statusChanged.emit(
+                "OSM-PBF gewählt. Direktes Lesen ist möglich, für wiederholte Routen ist FGB schneller."
+            )
+        else:
+            self.statusChanged.emit(f"Straßendatei gewählt: {Path(selected).name}")
 
     @Slot()
     def calculateRoute(self) -> None:
@@ -254,9 +262,10 @@ class RouteSelector(QObject):
         self._thread.started.connect(self._worker.run)
         self._worker.finished.connect(self._route_finished)
         self._worker.failed.connect(self._route_failed)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.failed.connect(self._worker.deleteLater)
         self._worker.finished.connect(self._thread.quit)
         self._worker.failed.connect(self._thread.quit)
-        self._thread.finished.connect(self._worker.deleteLater)
         self._thread.finished.connect(self._thread.deleteLater)
         self._thread.finished.connect(self._worker_cleanup)
         self._thread.start()
@@ -302,7 +311,7 @@ def main() -> int:
     selector = RouteSelector(traffic_signal_model)
     engine.rootContext().setContextProperty("routeSelector", selector)
     engine.rootContext().setContextProperty("trafficSignalModel", traffic_signal_model)
-    engine.load(Path(__file__).with_name("main.qml"))
+    engine.load(str(Path(__file__).with_name("main.qml")))
     if not engine.rootObjects():
         return 1
     return app.exec()
