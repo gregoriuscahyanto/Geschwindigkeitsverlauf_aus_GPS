@@ -47,7 +47,8 @@ jobs:
           app_dir = Path("qt_route_selector").resolve()
           sys.path.insert(0, str(app_dir))
 
-          from PySide6.QtWidgets import QApplication
+          from PySide6.QtQuickWidgets import QQuickWidget
+          from PySide6.QtWidgets import QApplication, QTabWidget
           from complete_app import CompleteApplicationWindow
 
           app = QApplication([])
@@ -58,6 +59,16 @@ jobs:
               raise SystemExit("Routing tab was not created")
           if "Geschwindigkeitsverlauf" not in window.tabs.tabText(1):
               raise SystemExit("Simulation tab was not created")
+
+          simulation = window.speed_profile
+          if simulation.axis_combo.count() != 2:
+              raise SystemExit("Time/distance axis selector is missing")
+          if simulation.findChildren(QTabWidget):
+              raise SystemExit("Simulation settings still contain nested tabs")
+          if simulation.map_widget.status() == QQuickWidget.Status.Error:
+              errors = "\n".join(error.toString() for error in simulation.map_widget.errors())
+              raise SystemExit(f"Simulation map QML failed to load:\n{errors}")
+
           print("Unified Qt application loaded successfully")
           window.close()
           PY
