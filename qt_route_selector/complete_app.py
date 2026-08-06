@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QTimer
 from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
@@ -37,14 +38,13 @@ def main() -> int:
     simulator = LiveSpeedProfileWindow(Path.cwd() / "route_result.json")
     simulator.show()
 
-    # route_result.json is written before summaryChanged is emitted. A short
+    def route_changed(points: list[dict[str, Any]]) -> None:
+        if len(points) > 1:
+            QTimer.singleShot(180, lambda: simulator.reload_route(silent=True))
+
+    # route_result.json is written before routeChanged is emitted. A short
     # delay avoids racing the file system on slower enterprise laptops.
-    selector.summaryChanged.connect(
-        lambda _summary: QTimer.singleShot(
-            180,
-            lambda: simulator.reload_route(silent=True),
-        )
-    )
+    selector.routeChanged.connect(route_changed)
 
     # Keep Python references for the full application lifetime.
     app._qml_engine = engine  # type: ignore[attr-defined]
