@@ -30,7 +30,7 @@ jobs:
       - name: Install routing test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install PySide6 numpy pandas networkx geopandas shapely pyproj pyogrio pyarrow
+          python -m pip install PySide6 numpy pandas networkx geopandas shapely pyproj pyogrio pyarrow osmium
 
       - name: Compile Python files
         run: python -m compileall -q qt_route_selector
@@ -49,14 +49,19 @@ jobs:
 
           from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
           from PySide6.QtWidgets import QApplication
-          from main import RouteSelector
+          from main import RoutePointModel, RouteSelector, TrafficSignalModel
           from offline_map import OfflineMapItem
 
           app = QApplication([])
           qmlRegisterType(OfflineMapItem, "OfflineMap", 1, 0, "OfflineMapItem")
           engine = QQmlApplicationEngine()
-          selector = RouteSelector()
+          route_points = RoutePointModel()
+          traffic_signals = TrafficSignalModel()
+          selector = RouteSelector(route_points, traffic_signals)
+          selector.setMapPreference("offline")
           engine.rootContext().setContextProperty("routeSelector", selector)
+          engine.rootContext().setContextProperty("routePointModel", route_points)
+          engine.rootContext().setContextProperty("trafficSignalModel", traffic_signals)
           engine.load(str(app_dir / "main.qml"))
           if not engine.rootObjects():
               raise SystemExit("QML application could not be created")
