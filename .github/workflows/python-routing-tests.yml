@@ -49,7 +49,13 @@ jobs:
 
           from PySide6.QtCore import Qt
           from PySide6.QtQuickWidgets import QQuickWidget
-          from PySide6.QtWidgets import QApplication, QGroupBox, QScrollArea, QTabWidget
+          from PySide6.QtWidgets import (
+              QApplication,
+              QGroupBox,
+              QScrollArea,
+              QSplitter,
+              QTabWidget,
+          )
           from complete_app import CompleteApplicationWindow
 
           app = QApplication([])
@@ -93,6 +99,14 @@ jobs:
               for area in scroll_areas
           ):
               raise SystemExit("Vertical settings scrolling is disabled")
+
+          map_splitter = simulation.map_widget.parentWidget()
+          if not isinstance(map_splitter, QSplitter):
+              raise SystemExit("Map/plot splitter is missing")
+          if map_splitter.orientation() != Qt.Orientation.Horizontal:
+              raise SystemExit("Geographic map is not positioned beside the plots")
+          if map_splitter.count() != 2:
+              raise SystemExit("Map/plot splitter does not contain exactly two panels")
 
           if simulation.dem_status_label is None:
               raise SystemExit("DEM controls are missing")
