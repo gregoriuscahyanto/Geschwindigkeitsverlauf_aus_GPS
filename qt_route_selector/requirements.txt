@@ -1,1 +1,2 @@
-PySide6
+# Minimal environment for the Qt route selector only.
+PySide6>=6.7
