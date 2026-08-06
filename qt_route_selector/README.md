@@ -1,23 +1,24 @@
-# Qt-Routenauswahl mit Online-OSM und Offline-Fallback
+# Qt-Routenplaner und Live-Geschwindigkeitsverlauf
 
 Die Anwendung ersetzt den manuellen Weg über die GraphHopper-Webseite und eine heruntergeladene GPX-Datei. Routing und OSM-Auswertung laufen lokal in Python. Für die Kartenanzeige wird standardmäßig die Online-Karte von OpenStreetMap verwendet; wenn sie nicht erreichbar ist, schaltet der Modus **Automatisch** auf die lokale Vektorkarte um.
 
+Zusätzlich berechnet ein zweites Qt-Fenster den Geschwindigkeitsverlauf live. Änderungen an Fahrer, Kurvenmodell, Ampeln, Überholvorgängen oder Fahrerrauschen werden nach kurzer Verzögerung neu berechnet und sofort geplottet.
+
 ## Funktionsumfang
 
-- native Oberfläche mit PySide6/QML
+- native Routenoberfläche mit PySide6/QML
 - Online-OSM als schnelle Standardkarte, ohne API-Key
 - automatischer Fallback auf die vollständig lokale Vektorkarte
-- manuelle Auswahl zwischen `Automatisch`, `Online OSM` und `Komplett offline`
 - Start, beliebig viele Zwischenziele und Ziel per Mausklick
 - lokale Routenberechnung ohne GraphHopper-, OSRM- oder Valhalla-Server
-- drei Routingprofile:
-  - **Hauptstraßen bevorzugen**: Autobahn, Bundesstraße, Landstraße, regionale Straße, Seitenstraße
-  - **Schnellste Route**: reine OSM-Fahrzeit
-  - **Kürzeste Route**: reine Entfernung
+- Hauptstraßen-, schnellstes- und kürzestes Routingprofil
 - Berücksichtigung von Einbahnstraßen, Kreisverkehren und einfachen Zufahrtsregeln
-- Anzeige von Route und gefundenen Ampeln
-- Export als `selected_region.json` und `route_result.json`
-- wiederverwendbarer Graph-Cache für erneute Routen in derselben Region
+- Live-Fahrerprofile `Normalo`, `Rennfahrer`, `Handwerker`, `Rentner` und `Rentner + Anhänger`
+- live einstellbarer Geschwindigkeitsverlauf mit Straßenlimit, Kurvenlimit und Straßenbelag
+- frei wählbare Anzahl von Ampelstopps und Überholvorgängen
+- einstellbare Beschleunigung, Verzögerung, Ruck, Temperament und Fahrerrauschen
+- Plots über Strecke, Zeit und Längsbeschleunigung
+- CSV- und JSON-Export der Simulation
 
 ## Installation
 
@@ -35,13 +36,34 @@ Nach einem Git-Update muss die virtuelle Umgebung nicht neu erstellt werden. Es 
 .\.venv\Scripts\python.exe -m pip install -r qt_route_selector\requirements.txt
 ```
 
-## Anwendung starten
+## Empfohlener Start: Karte und Live-Simulation gemeinsam
+
+```powershell
+.\.venv\Scripts\python.exe qt_route_selector\complete_app.py
+```
+
+Dabei öffnen sich zwei Fenster:
+
+1. der Routenplaner mit Karte,
+2. der Live-Geschwindigkeitsverlauf mit Einstellungen und Diagrammen.
+
+Nach jeder erfolgreich berechneten Route wird `route_result.json` automatisch in das Simulationsfenster übernommen.
+
+Nur den Routenplaner starten:
 
 ```powershell
 .\.venv\Scripts\python.exe qt_route_selector\main.py
 ```
 
-## Bedienung
+Nur die Live-Simulation starten:
+
+```powershell
+.\.venv\Scripts\python.exe qt_route_selector\live_speed_profile.py
+```
+
+Das Simulationsfenster überwacht `route_result.json` und lädt Änderungen automatisch nach.
+
+## Bedienung des Routenplaners
 
 1. Die Online-OSM-Karte erscheint standardmäßig sofort.
 2. Startpunkt anklicken.
@@ -51,6 +73,105 @@ Nach einem Git-Update muss die virtuelle Umgebung nicht neu erstellt werden. Es 
 6. **Route berechnen** anklicken.
 
 Mit **Letzten Punkt entfernen** lässt sich die Klickfolge korrigieren.
+
+## Live-Geschwindigkeitsverlauf
+
+Der erste Referenzverlauf wird aus `maxspeed_kmh` aufgebaut. Darauf werden die weiteren Grenzen und Ereignisse gelegt:
+
+```text
+OSM-Straßenlimit
+    ↓
+Reisegeschwindigkeit und Fahrerobergrenze
+    ↓
+Straßenbelag
+    ↓
+Kurvenlimit aus Radius und Querbeschleunigung
+    ↓
+Ampel- und Überholereignisse
+    ↓
+Fahrerrauschen
+    ↓
+Beschleunigungs-, Brems- und Ruckbegrenzung
+    ↓
+v(s), v(t) und a(t)
+```
+
+### Fahrer
+
+Die Fahrer-Presets stammen aus den bisherigen festen Parametern in `runPipeline.m`. Nach Auswahl eines Presets können alle Werte individuell verändert werden:
+
+- Temperament
+- Reisegeschwindigkeit und absolute Obergrenze
+- Geschwindigkeits-Bias und Toleranz
+- Reglerverstärkung `Kp`
+- maximale Beschleunigung
+- maximale Verzögerung
+- maximaler Ruck
+- Anhalten an Start und Ziel
+
+### Kurven
+
+Die Route wird auf einen regelmäßigen Abstand resampelt. Aus drei räumlich getrennten Punkten wird ein lokaler Kurvenradius geschätzt. Die Kurvengrenze wird aus Radius und maximaler Querbeschleunigung gebildet. Einstellbar sind:
+
+- Kurvenmodell ein/aus
+- maximale Querbeschleunigung
+- minimaler und maximaler Radius
+- Abtastabstand
+- räumliche Glättung
+- geplante Verzögerung vor einer Kurve
+- Berücksichtigung des Straßenbelags
+
+### Ampeln
+
+**Anzahl Stopps** gibt die gewünschte Anzahl von Ampelvorgängen an. Zuerst werden erkannte OSM-Ampeln verwendet. Ist die gewünschte Zahl größer, ergänzt das Modell reproduzierbare synthetische Stopppositionen. Einstellbar sind außerdem:
+
+- Rotphase minimal und maximal
+- geplante Verzögerung
+- Stopptoleranz
+- Zufalls-Seed
+
+### Überholen
+
+Überholvorgänge bestehen aus einer Folgephase hinter einem langsameren Fahrzeug und einer anschließenden Überholphase. Einstellbar sind:
+
+- Anzahl der Vorgänge
+- Geschwindigkeit des langsamen Fahrzeugs
+- Intensität beziehungsweise gewünschter Geschwindigkeits-Boost
+- Länge der Folgephase
+- Länge der Überholphase
+
+Die Geschwindigkeit bleibt durch Straßen-, Kurven- und Fahrerobergrenzen begrenzt.
+
+### Fahrerrauschen
+
+Das Rauschen ist zeitlich korreliert und nicht von Punkt zu Punkt unabhängig. Einstellbar sind:
+
+- Standardabweichung in km/h
+- Zeitkonstante
+- Zufalls-Seed
+
+Mit demselben Seed entsteht bei gleichen Parametern derselbe Verlauf.
+
+### Fahrzeug und Anhänger
+
+Das Massenmodell begrenzt die verfügbare Beschleunigung und Bremsung anhand von Fahrzeugmasse, Anhängermasse, Rollwiderstand sowie maximaler Antriebs- und Bremskraft. Das aktuelle Routing besitzt noch kein Höhenprofil; Steigung und Gefälle werden deshalb noch nicht berücksichtigt.
+
+## Diagramme und Export
+
+Das Live-Fenster zeigt:
+
+- `v(s)`: Straßenlimit, Kurvenlimit, Basis-Sollwert, geplante und simulierte Geschwindigkeit
+- `v(t)`: Soll- und Istgeschwindigkeit mit markierten Rotphasen
+- `a(t)`: Längsbeschleunigung
+
+Über **CSV + JSON exportieren** entstehen:
+
+```text
+speed_profile_result.csv
+speed_profile_result.json
+```
+
+Die CSV enthält Zeit, Strecke, Geschwindigkeit, Sollgeschwindigkeit und Beschleunigung. Die JSON-Datei enthält zusätzlich alle Parameter, räumlichen Profile und Ereignisse.
 
 ## Warum das direkte PBF-Lesen langsam ist
 
@@ -66,42 +187,26 @@ Nach Auswahl einer PBF erscheint die Schaltfläche **PBF-Schnellindex erstellen*
 baden-wuerttemberg-260805_routing.gpkg
 ```
 
-Die Konvertierung verwendet Pyosmium und liest die PBF nur einmal. Das GeoPackage enthält:
-
-- befahrbare Straßen mit relevanten OSM-Tags
-- räumlichen Index
-- Ampeln in einer separaten Ebene
-
-Nach Abschluss aktiviert die Anwendung das GeoPackage automatisch. Weitere Karten- und Routingabfragen sind dann wesentlich schneller. Wird später dieselbe PBF erneut gewählt und ein aktueller Schnellindex liegt daneben, verwendet die Anwendung ihn automatisch.
+Das GeoPackage enthält befahrbare Straßen, relevante OSM-Tags, einen räumlichen Index und Ampeln in einer separaten Ebene. Nach Abschluss aktiviert die Anwendung das GeoPackage automatisch.
 
 ## Kartenmodi
 
-### Automatisch
-
-Die Anwendung startet mit Online-OSM. Ein kurzer Verbindungstest und Qt-Kartenfehler führen bei Nichterreichbarkeit zum Offline-Fallback. Die Erreichbarkeit wird in größeren Abständen erneut geprüft.
-
-### Online OSM
-
-Erzwingt die Online-Karte. Das lokale Routing verwendet weiterhin ausschließlich deine lokale Straßendatei.
-
-### Komplett offline
-
-Verwendet den nativen Qt-Vektorrenderer. Bei GeoPackage/FGB wird der sichtbare Ausschnitt nach einer kurzen Pause automatisch nachgeladen. Kleine Kartenbewegungen verwenden einen vergrößerten In-Memory-Cache. Bei einer direkten PBF ist automatisches Nachladen deaktiviert, damit nicht nach jeder Bewegung ein langer PBF-Scan beginnt; hier sollte der Schnellindex erstellt werden.
+- **Automatisch:** Online-OSM mit automatischem Offline-Fallback.
+- **Online OSM:** Erzwingt die Online-Karte; das Routing bleibt lokal.
+- **Komplett offline:** Verwendet den nativen Qt-Vektorrenderer.
 
 ## Straßenpriorisierung
 
-Das Standardprofil **Hauptstraßen bevorzugen** verwendet eine moderate Gewichtung. Die Rangfolge lautet:
+Das Standardprofil **Hauptstraßen bevorzugen** verwendet eine moderate Gewichtung:
 
 1. Autobahn (`motorway`, Referenz `A`)
-2. Bundesstraße (Referenz `B`, typischerweise `trunk`/`primary`)
+2. Bundesstraße (Referenz `B`)
 3. Landstraße (Referenz `L`)
-4. Kreis- und regionale Straßen (`K`, `secondary`, `tertiary`)
+4. Kreis- und regionale Straßen
 5. unklassifizierte und Wohnstraßen
 6. verkehrsberuhigte Bereiche und Servicewege
 
-Die Gewichtung bevorzugt Hauptstraßen, erzwingt aber keine extremen Umwege. Für eine rein zeitbasierte Entscheidung kann auf **Schnellste Route** gewechselt werden.
-
-## Ausgabedateien
+## Ausgabedateien des Routings
 
 ### `selected_region.json`
 
@@ -109,18 +214,7 @@ Enthält alle gewählten GPS-Punkte, die gepufferte Arbeitsregion und die gewäh
 
 ### `route_result.json`
 
-Enthält:
-
-- Routengeometrie als GPS-Koordinaten
-- Teilstrecken zwischen den gewählten Punkten
-- Segmentlängen und vorläufige Fahrzeiten
-- `maxspeed_kmh`
-- `highway`, Straßenkategorie und Prioritätsfaktor
-- `surface`, Straßenname, Referenz und Einbahnstraßeninformation
-- Ampelpositionen und deren Entfernung vom Routenstart
-- Routingprofil und Graph-Cache-Status
-
-Diese Daten können direkt in das Fahrer-, Kurven- und Geschwindigkeitsmodell übernommen werden.
+Enthält Routengeometrie, Teilstrecken, Segmentlängen, `maxspeed_kmh`, Straßenklasse, Straßenbelag, Ampelpositionen sowie Routing- und Cacheinformationen. Diese Datei ist der Eingang für die Live-Simulation.
 
 ## Tests
 
@@ -128,14 +222,6 @@ Diese Daten können direkt in das Fahrer-, Kurven- und Geschwindigkeitsmodell ü
 .\.venv\Scripts\python.exe -m unittest discover -s qt_route_selector\tests -v
 ```
 
-## Grenzen des aktuellen Routers
+## Grenzen
 
-Der Router ist ein nachvollziehbarer Forschungs- und Simulationsbaustein, kein vollständiges Navigationssystem. Noch nicht ausgewertet werden unter anderem:
-
-- OSM-Abbiegebeschränkungen aus Relationen
-- zeitabhängige Zufahrtsregeln
-- Fahrzeughöhe, Gewicht und Gefahrgutregeln
-- detaillierte Kreuzungs- und Abbiegekosten
-- Fahrspuren und Spurwechsel
-
-Die lokale Fallback-Karte zeichnet derzeit Straßen, Route, Punkte und Ampeln, aber noch keine vollständige kartografische Basiskarte mit Gebäuden, Gewässern und Landnutzung.
+Der Router und Simulator sind nachvollziehbare Forschungsbausteine, keine vollständige Serien-Navigation oder validierte Fahrdynamiksimulation. Noch nicht berücksichtigt werden unter anderem OSM-Abbiegebeschränkungen, zeitabhängige Regeln, Fahrspuren, Verkehrsdichte und ein digitales Höhenmodell. Die Simulationsparameter sollten anhand realer Messfahrten kalibriert werden.
