@@ -1,6 +1,6 @@
 # Python-Umgebung einrichten
 
-Empfohlen wird Python 3.11 (64-bit). Die virtuelle Umgebung wird direkt im Repository unter `.venv` angelegt und ist über `.gitignore` vom Commit ausgeschlossen.
+Empfohlen wird Python 3.11 (64 Bit). Die virtuelle Umgebung wird direkt im Repository unter `.venv` angelegt und ist über `.gitignore` vom Commit ausgeschlossen.
 
 ## Windows PowerShell
 
@@ -30,11 +30,17 @@ python -m pip install -r requirements.txt
 
 ## Nur die Qt-Routenanwendung installieren
 
-Diese Variante installiert PySide6 sowie die für das lokale Routing benötigten Geo- und Graphbibliotheken, aber nicht die übrigen GPX-/PBF-Hilfsprogramme des Gesamtprojekts:
+Diese Variante installiert PySide6 sowie die für die Offline-Karte und das lokale Routing benötigten Geo- und Graphbibliotheken, aber nicht die übrigen GPX-/PBF-Hilfsprogramme des Gesamtprojekts:
 
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r qt_route_selector\requirements.txt
+```
+
+Eine bereits vorhandene `.venv` muss nach einem Git-Update nicht neu erstellt werden. Es genügt, die Requirements erneut auszuführen:
+
+```powershell
 .\.venv\Scripts\python.exe -m pip install -r qt_route_selector\requirements.txt
 ```
 
@@ -52,7 +58,9 @@ Ohne Aktivierung:
 .\.venv\Scripts\python.exe qt_route_selector\main.py
 ```
 
-Die Anwendung akzeptiert vorbereitete FlatGeobuf-/GeoPackage-Daten sowie direkt eine `.osm.pbf`. Für wiederholte Berechnungen ist ein räumlich indiziertes FGB- oder GeoPackage performanter.
+Die Anwendung akzeptiert vorbereitete FlatGeobuf-/GeoPackage-Daten sowie direkt eine `.osm.pbf`. Für wiederholte Berechnungen ist ein räumlich indiziertes FGB oder GeoPackage performanter.
+
+Die Kartenansicht rendert die lokalen Straßen selbst. Beim Start und bei der Bedienung werden keine Kartenkacheln aus dem Internet abgerufen; ein API-Key ist nicht erforderlich.
 
 ## Tests ausführen
 
@@ -60,4 +68,4 @@ Die Anwendung akzeptiert vorbereitete FlatGeobuf-/GeoPackage-Daten sowie direkt 
 .\.venv\Scripts\python.exe -m unittest discover -s qt_route_selector\tests -v
 ```
 
-Weitere Hinweise zur Bedienung und zum JSON-Ausgabeformat stehen in `qt_route_selector/README.md`.
+Weitere Hinweise zur Bedienung, PBF-/FGB-Auswahl und zum JSON-Ausgabeformat stehen in `qt_route_selector/README.md`.
