@@ -13,7 +13,7 @@ APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-from integrated_speed_profile import IntegratedSpeedProfileWindow  # noqa: E402
+from integrated_speed_profile_v2 import IntegratedSpeedProfileWindow  # noqa: E402
 from main import RoutePointModel, RouteSelector, TrafficSignalModel  # noqa: E402
 from offline_map import OfflineMapItem  # noqa: E402
 
