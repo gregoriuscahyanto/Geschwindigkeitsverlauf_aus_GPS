@@ -3,13 +3,22 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from local_router import (
-    RoutingError,
-    _enrich_record,
-    _iter_lines,
-    _load_roads,
-    _text,
-)
+try:
+    from .local_router import (
+        RoutingError,
+        _enrich_record,
+        _iter_lines,
+        _load_roads,
+        _text,
+    )
+except ImportError:  # Direct execution via qt_route_selector/main.py
+    from local_router import (
+        RoutingError,
+        _enrich_record,
+        _iter_lines,
+        _load_roads,
+        _text,
+    )
 
 
 ROAD_RANK = {
@@ -42,8 +51,8 @@ def load_map_features(
     roads_path: str | Path,
     bbox: dict[str, float],
     *,
-    max_features: int = 35_000,
-    max_vertices: int = 350_000,
+    max_features: int = 15_000,
+    max_vertices: int = 120_000,
 ) -> dict[str, Any]:
     """Load a display-friendly road layer for the visible offline map area.
 
