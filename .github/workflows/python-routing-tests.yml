@@ -30,7 +30,7 @@ jobs:
       - name: Install routing test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install PySide6 numpy pandas networkx geopandas shapely pyproj pyogrio pyarrow osmium
+          python -m pip install PySide6 pyqtgraph numpy pandas networkx geopandas shapely pyproj pyogrio pyarrow osmium
 
       - name: Compile Python files
         run: python -m compileall -q qt_route_selector
@@ -38,7 +38,7 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s qt_route_selector/tests -v
 
-      - name: Load QML application offscreen
+      - name: Load Qt applications offscreen
         run: |
           python - <<'PY'
           import sys
@@ -49,6 +49,7 @@ jobs:
 
           from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
           from PySide6.QtWidgets import QApplication
+          from live_speed_profile import LiveSpeedProfileWindow
           from main import RoutePointModel, RouteSelector, TrafficSignalModel
           from offline_map import OfflineMapItem
 
@@ -65,5 +66,9 @@ jobs:
           engine.load(str(app_dir / "main.qml"))
           if not engine.rootObjects():
               raise SystemExit("QML application could not be created")
-          print("QML application loaded successfully")
+
+          simulator = LiveSpeedProfileWindow(app_dir / "missing-route-result.json")
+          if simulator.windowTitle() != "Live-Geschwindigkeitsverlauf":
+              raise SystemExit("Live simulation window could not be created")
+          print("Qt applications loaded successfully")
           PY
