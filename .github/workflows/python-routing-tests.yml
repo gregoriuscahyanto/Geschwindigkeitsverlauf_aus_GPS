@@ -30,7 +30,7 @@ jobs:
       - name: Install routing test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install PySide6 pyqtgraph numpy pandas networkx geopandas shapely pyproj pyogrio pyarrow osmium
+          python -m pip install PySide6 pyqtgraph numpy pandas networkx geopandas shapely pyproj pyogrio pyarrow osmium rasterio
 
       - name: Compile Python files
         run: python -m compileall -q qt_route_selector
@@ -47,8 +47,9 @@ jobs:
           app_dir = Path("qt_route_selector").resolve()
           sys.path.insert(0, str(app_dir))
 
+          from PySide6.QtCore import Qt
           from PySide6.QtQuickWidgets import QQuickWidget
-          from PySide6.QtWidgets import QApplication, QTabWidget
+          from PySide6.QtWidgets import QApplication, QGroupBox, QScrollArea, QTabWidget
           from complete_app import CompleteApplicationWindow
 
           app = QApplication([])
@@ -65,6 +66,36 @@ jobs:
               raise SystemExit("Time/distance axis selector is missing")
           if simulation.findChildren(QTabWidget):
               raise SystemExit("Simulation settings still contain nested tabs")
+
+          expected_groups = {"Kurven", "Ampeln", "Überholen", "Rauschen", "Fahrzeug"}
+          groups = {
+              group.title(): group
+              for group in simulation.findChildren(QGroupBox)
+              if group.title() in expected_groups
+          }
+          if set(groups) != expected_groups:
+              raise SystemExit("One or more flattened setting groups are missing")
+          for title, group in groups.items():
+              if group.isHidden():
+                  raise SystemExit(f"Setting group is hidden: {title}")
+              layout = group.layout()
+              if layout is None or layout.count() == 0:
+                  raise SystemExit(f"Setting group is empty: {title}")
+              child = layout.itemAt(0).widget()
+              if child is None or child.isHidden():
+                  raise SystemExit(f"Setting group content is hidden: {title}")
+
+          scroll_areas = simulation.findChildren(QScrollArea)
+          if not scroll_areas:
+              raise SystemExit("Settings scroll area is missing")
+          if all(
+              area.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+              for area in scroll_areas
+          ):
+              raise SystemExit("Vertical settings scrolling is disabled")
+
+          if simulation.dem_status_label is None:
+              raise SystemExit("DEM controls are missing")
           if simulation.map_widget.status() == QQuickWidget.Status.Error:
               errors = "\n".join(error.toString() for error in simulation.map_widget.errors())
               raise SystemExit(f"Simulation map QML failed to load:\n{errors}")
