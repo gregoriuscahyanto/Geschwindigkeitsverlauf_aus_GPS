@@ -16,7 +16,6 @@ ApplicationWindow {
     property bool startValid: false
     property bool targetValid: false
     property var selectedRegion: null
-    property var signalPoints: []
     property var routeSummary: ({})
 
     Plugin {
@@ -71,16 +70,17 @@ ApplicationWindow {
             Layout.fillHeight: true
             spacing: 0
 
-            Map {
-                id: map
+            MapView {
+                id: mapView
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                plugin: osmPlugin
-                center: QtPositioning.coordinate(48.743, 9.320)
-                zoomLevel: 12
+                map.plugin: osmPlugin
+                map.center: QtPositioning.coordinate(48.743, 9.320)
+                map.zoomLevel: 12
 
                 MapRectangle {
                     id: regionRectangle
+                    parent: mapView.map
                     visible: root.selectedRegion !== null
                     color: "#224070d8"
                     border.color: "#4050d0"
@@ -101,18 +101,23 @@ ApplicationWindow {
 
                 MapPolyline {
                     id: routeLine
+                    parent: mapView.map
                     line.width: 6
                     line.color: "#1769d2"
                     opacity: 0.9
                 }
 
                 MapItemView {
-                    model: root.signalPoints
+                    parent: mapView.map
+                    model: trafficSignalModel
+                    autoFitViewport: false
+
                     delegate: MapQuickItem {
-                        coordinate: QtPositioning.coordinate(
-                            modelData.latitude,
-                            modelData.longitude
-                        )
+                        required property real latitude
+                        required property real longitude
+                        required property real distanceFromStartM
+
+                        coordinate: QtPositioning.coordinate(latitude, longitude)
                         anchorPoint.x: signalMarker.width / 2
                         anchorPoint.y: signalMarker.height / 2
 
@@ -125,18 +130,19 @@ ApplicationWindow {
                             border.color: "white"
                             border.width: 2
 
-                            ToolTip.visible: signalMouse.containsMouse
+                            ToolTip.visible: signalHover.hovered
                             ToolTip.text: "Ampel bei "
-                                + Math.round(modelData.distance_from_start_m)
+                                + Math.round(distanceFromStartM)
                                 + " m"
 
-                            HoverHandler { id: signalMouse }
+                            HoverHandler { id: signalHover }
                         }
                     }
                 }
 
                 MapQuickItem {
                     id: startMarker
+                    parent: mapView.map
                     visible: root.startValid
                     anchorPoint.x: startCircle.width / 2
                     anchorPoint.y: startCircle.height / 2
@@ -154,6 +160,7 @@ ApplicationWindow {
 
                 MapQuickItem {
                     id: targetMarker
+                    parent: mapView.map
                     visible: root.targetValid
                     anchorPoint.x: targetCircle.width / 2
                     anchorPoint.y: targetCircle.height / 2
@@ -170,10 +177,12 @@ ApplicationWindow {
                 }
 
                 TapHandler {
+                    id: coordinateTapHandler
                     acceptedButtons: Qt.LeftButton
                     enabled: !routeSelector.busy
-                    onTapped: function(eventPoint, button) {
-                        const coordinate = map.toCoordinate(eventPoint.position)
+
+                    onSingleTapped: (eventPoint, button) => {
+                        const coordinate = mapView.map.toCoordinate(eventPoint.position)
                         if (coordinate.isValid) {
                             routeSelector.selectPoint(
                                 coordinate.latitude,
@@ -192,6 +201,7 @@ ApplicationWindow {
                     radius: 5
                     color: "#ddffffff"
                     border.color: "#bbbbbb"
+                    z: 1000
 
                     Label {
                         id: instructionLabel
@@ -225,7 +235,9 @@ ApplicationWindow {
                             ? routeSelector.roadsFile
                             : "Noch keine FGB-/GeoPackage-Datei gewählt"
                         wrapMode: Text.WrapAnywhere
-                        color: routeSelector.roadsFile.length > 0 ? palette.text : palette.placeholderText
+                        color: routeSelector.roadsFile.length > 0
+                            ? palette.text
+                            : palette.placeholderText
                     }
 
                     MenuSeparator { Layout.fillWidth: true }
@@ -303,8 +315,9 @@ ApplicationWindow {
 
                     Label {
                         Layout.fillWidth: true
-                        text: "Die berechnete Route wird zusätzlich als route_result.json gespeichert. "
-                            + "Darin stehen Koordinaten, maxspeed, Straßenklasse, Oberfläche und Ampelpositionen."
+                        text: "Die Route wird als route_result.json gespeichert. "
+                            + "Darin stehen Koordinaten, maxspeed, Straßenklasse, "
+                            + "Oberfläche und Ampelpositionen."
                         wrapMode: Text.WordWrap
                         color: palette.placeholderText
                     }
@@ -362,10 +375,6 @@ ApplicationWindow {
                 ))
             }
             routeLine.path = path
-        }
-
-        function onSignalsChanged(points) {
-            root.signalPoints = points
         }
 
         function onSummaryChanged(summary) {
