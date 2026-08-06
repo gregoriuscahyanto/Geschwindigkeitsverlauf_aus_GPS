@@ -1,0 +1,23 @@
+# Complete Python environment for the OSM/GPX processing pipeline and Qt UI.
+# Recommended Python version: 3.11 (64-bit).
+
+# Desktop UI
+PySide6>=6.7
+
+# Numerical and tabular processing
+numpy>=1.26
+pandas>=2.2
+
+# OSM PBF processing
+osmium>=4.0
+
+# Geospatial data and coordinate transformations
+geopandas>=1.0
+shapely>=2.0
+pyproj>=3.6
+pyogrio>=0.9
+rtree>=1.2
+pyarrow>=16.0
+
+# GPX/XML processing
+lxml>=5.2
