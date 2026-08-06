@@ -7,6 +7,7 @@ PySide6>=6.7
 # Numerical and tabular processing
 numpy>=1.26
 pandas>=2.2
+networkx>=3.3
 
 # OSM PBF processing
 osmium>=4.0
