@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import math
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -22,6 +24,8 @@ DEFAULT_SPEED_KMH = {
     "service": 20.0,
 }
 
+_HSTORE_TAG = re.compile(r'"([^"]+)"=>"([^"]*)"')
+
 
 class RoutingError(RuntimeError):
     """Raised when a local route cannot be calculated."""
@@ -36,6 +40,35 @@ def _text(value: Any) -> str:
     except (TypeError, ValueError):
         pass
     return str(value).strip()
+
+
+def _is_pbf(path: Path) -> bool:
+    return path.name.lower().endswith((".osm.pbf", ".pbf"))
+
+
+def _parse_other_tags(value: Any) -> dict[str, str]:
+    text = _text(value)
+    if not text:
+        return {}
+    if text.startswith("{"):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return {str(key): str(item) for key, item in parsed.items()}
+        except json.JSONDecodeError:
+            pass
+    return {key: item for key, item in _HSTORE_TAG.findall(text)}
+
+
+def _enrich_record(record: dict[str, Any]) -> dict[str, Any]:
+    tags = _parse_other_tags(record.get("other_tags"))
+    if not tags:
+        return record
+    enriched = dict(record)
+    for key, value in tags.items():
+        if not _text(enriched.get(key)):
+            enriched[key] = value
+    return enriched
 
 
 def _parse_maxspeed(value: Any, highway: str) -> float:
@@ -75,7 +108,6 @@ def _is_blocked(record: dict[str, Any]) -> bool:
 def _oneway_mode(record: dict[str, Any]) -> str:
     value = _text(record.get("oneway")).lower()
     junction = _text(record.get("junction")).lower()
-
     if value in {"-1", "reverse"}:
         return "reverse"
     if value in {"yes", "true", "1"} or junction == "roundabout":
@@ -108,18 +140,92 @@ def _haversine_m(a: tuple[float, float], b: tuple[float, float]) -> float:
 
 
 def _node_key(lon: float, lat: float) -> tuple[float, float]:
-    # Identical OSM nodes normally have identical coordinates. Rounding also
-    # joins tiny floating-point differences introduced by file conversion.
     return round(float(lon), 7), round(float(lat), 7)
 
 
 def _record_value(record: dict[str, Any], *names: str) -> Any:
     for name in names:
-        if name in record:
-            value = record[name]
-            if _text(value):
-                return value
+        if name in record and _text(record[name]):
+            return record[name]
     return None
+
+
+def _list_layers(path: Path) -> list[tuple[str, str]]:
+    import pyogrio
+
+    try:
+        return [(str(item[0]), str(item[1])) for item in pyogrio.list_layers(path)]
+    except Exception as exc:
+        raise RoutingError(f"Datenebenen konnten nicht gelesen werden: {exc}") from exc
+
+
+def _choose_road_layer(path: Path) -> str | int | None:
+    if _is_pbf(path):
+        return "lines"
+    layers = _list_layers(path)
+    if not layers:
+        return None
+    preferred = {"highways", "roads", "streets", "lines"}
+    for name, _geometry_type in layers:
+        if name.lower() in preferred:
+            return name
+    for name, geometry_type in layers:
+        if "line" in geometry_type.lower():
+            return name
+    return layers[0][0]
+
+
+def _read_dataframe(
+    path: Path,
+    *,
+    layer: str | int | None,
+    bbox: tuple[float, float, float, float],
+    where: str | None = None,
+) -> Any:
+    import pyogrio
+
+    arguments: dict[str, Any] = {
+        "layer": layer,
+        "bbox": bbox,
+        "force_2d": True,
+    }
+    if where:
+        arguments["where"] = where
+    if not _is_pbf(path):
+        arguments["use_arrow"] = True
+
+    try:
+        return pyogrio.read_dataframe(path, **arguments)
+    except (TypeError, ValueError):
+        arguments.pop("use_arrow", None)
+        return pyogrio.read_dataframe(path, **arguments)
+
+
+def _load_roads(path: Path, bbox: tuple[float, float, float, float]) -> Any:
+    layer = _choose_road_layer(path)
+    where = "highway IS NOT NULL" if _is_pbf(path) else None
+    try:
+        roads = _read_dataframe(path, layer=layer, bbox=bbox, where=where)
+    except Exception as exc:
+        if _is_pbf(path) and where is not None:
+            try:
+                roads = _read_dataframe(path, layer=layer, bbox=bbox)
+            except Exception:
+                raise RoutingError(
+                    f"OSM-PBF konnte nicht räumlich gelesen werden: {exc}"
+                ) from exc
+        else:
+            raise RoutingError(f"Straßendaten konnten nicht gelesen werden: {exc}") from exc
+
+    if roads is None or roads.empty:
+        raise RoutingError("Im gewählten Kartenausschnitt wurden keine Straßen gefunden.")
+    if "geometry" not in roads.columns:
+        raise RoutingError("Die Straßendatei besitzt keine Geometriespalte.")
+    if roads.crs is not None and not roads.crs.is_geographic:
+        raise RoutingError(
+            "Die Routingdatei muss geografische WGS84-Koordinaten verwenden (EPSG:4326)."
+        )
+    return roads
 
 
 def _add_edge(graph: Any, source: Any, target: Any, attributes: dict[str, Any]) -> None:
@@ -128,34 +234,18 @@ def _add_edge(graph: Any, source: Any, target: Any, attributes: dict[str, Any]) 
         graph.add_edge(source, target, **attributes)
 
 
-def _load_roads(path: Path, bbox: tuple[float, float, float, float]) -> Any:
-    import pyogrio
-
-    try:
-        roads = pyogrio.read_dataframe(path, bbox=bbox, use_arrow=True, force_2d=True)
-    except (TypeError, ValueError):
-        roads = pyogrio.read_dataframe(path, bbox=bbox, force_2d=True)
-    except Exception as exc:
-        raise RoutingError(f"Straßendaten konnten nicht gelesen werden: {exc}") from exc
-
-    if roads is None or roads.empty:
-        raise RoutingError("Im gewählten Kartenausschnitt wurden keine Straßen gefunden.")
-    if "geometry" not in roads.columns:
-        raise RoutingError("Die Straßendatei besitzt keine Geometriespalte.")
-    return roads
-
-
 def _build_graph(roads: Any) -> tuple[Any, dict[tuple[float, float], tuple[float, float]]]:
     import networkx as nx
 
     graph = nx.DiGraph()
     node_positions: dict[tuple[float, float], tuple[float, float]] = {}
 
-    for record in roads.to_dict("records"):
-        if _is_blocked(record):
+    for raw_record in roads.to_dict("records"):
+        record = _enrich_record(raw_record)
+        highway = _text(record.get("highway")).lower()
+        if not highway or _is_blocked(record):
             continue
 
-        highway = _text(record.get("highway")).lower() or "unclassified"
         maxspeed = _parse_maxspeed(
             _record_value(
                 record,
@@ -180,13 +270,10 @@ def _build_graph(roads: Any) -> tuple[Any, dict[tuple[float, float], tuple[float
         for line in _iter_lines(record.get("geometry")):
             coordinates = list(line.coords)
             for first, second in zip(coordinates[:-1], coordinates[1:]):
-                lon1, lat1 = float(first[0]), float(first[1])
-                lon2, lat2 = float(second[0]), float(second[1])
-                source = _node_key(lon1, lat1)
-                target = _node_key(lon2, lat2)
+                source = _node_key(first[0], first[1])
+                target = _node_key(second[0], second[1])
                 if source == target:
                     continue
-
                 distance_m = _haversine_m(source, target)
                 if distance_m < 0.05:
                     continue
@@ -198,7 +285,6 @@ def _build_graph(roads: Any) -> tuple[Any, dict[tuple[float, float], tuple[float
                     "distance_m": distance_m,
                     "travel_time_s": distance_m / speed_mps,
                 }
-
                 if direction == "forward":
                     _add_edge(graph, source, target, attributes)
                 elif direction == "reverse":
@@ -227,8 +313,8 @@ def _nearest_nodes(
     x, y = transformer.transform(longitudes, latitudes)
     point_x, point_y = transformer.transform(point_lat_lon[1], point_lat_lon[0])
     distances = np.hypot(x - point_x, y - point_y)
-    nearest_indexes = np.argsort(distances)[: min(count, len(nodes))]
-    return [(nodes[int(index)], float(distances[int(index)])) for index in nearest_indexes]
+    indexes = np.argsort(distances)[: min(count, len(nodes))]
+    return [(nodes[int(index)], float(distances[int(index)])) for index in indexes]
 
 
 def _shortest_path_with_snapping(
@@ -242,7 +328,6 @@ def _shortest_path_with_snapping(
 
     start_candidates = _nearest_nodes(node_positions, start)
     target_candidates = _nearest_nodes(node_positions, target)
-
     if not start_candidates or not target_candidates:
         raise RoutingError("Start oder Ziel konnte nicht an das Straßennetz angebunden werden.")
     if start_candidates[0][1] > max_snap_distance_m:
@@ -258,23 +343,10 @@ def _shortest_path_with_snapping(
     sink = ("__route_sink__", id(graph))
     graph.add_node(source)
     graph.add_node(sink)
-
     for candidate, distance in start_candidates:
-        graph.add_edge(
-            source,
-            candidate,
-            travel_time_s=distance / 5.0,
-            distance_m=distance,
-            snap=True,
-        )
+        graph.add_edge(source, candidate, travel_time_s=distance / 5.0)
     for candidate, distance in target_candidates:
-        graph.add_edge(
-            candidate,
-            sink,
-            travel_time_s=distance / 5.0,
-            distance_m=distance,
-            snap=True,
-        )
+        graph.add_edge(candidate, sink, travel_time_s=distance / 5.0)
 
     try:
         full_path = nx.shortest_path(
@@ -284,19 +356,54 @@ def _shortest_path_with_snapping(
             weight="travel_time_s",
             method="dijkstra",
         )
-    except nx.NetworkXNoPath as exc:
+    except (nx.NetworkXNoPath, nx.NodeNotFound) as exc:
         raise RoutingError(
             "Zwischen Start und Ziel wurde in der gewählten Region keine befahrbare Route gefunden. "
             "Vergrößere gegebenenfalls den Regionsrand."
         ) from exc
     finally:
-        graph.remove_node(source)
-        graph.remove_node(sink)
+        if graph.has_node(source):
+            graph.remove_node(source)
+        if graph.has_node(sink):
+            graph.remove_node(sink)
 
     node_path = full_path[1:-1]
+    if len(node_path) < 2:
+        raise RoutingError("Start und Ziel liegen nach dem Snapping auf demselben Straßenknoten.")
     start_snap = _haversine_m((start[1], start[0]), node_path[0])
     target_snap = _haversine_m((target[1], target[0]), node_path[-1])
     return node_path, start_snap, target_snap
+
+
+def _read_signal_features(
+    path: Path,
+    bbox: tuple[float, float, float, float],
+) -> Any | None:
+    if _is_pbf(path):
+        try:
+            return _read_dataframe(
+                path,
+                layer="points",
+                bbox=bbox,
+                where="highway = 'traffic_signals'",
+            )
+        except Exception:
+            try:
+                return _read_dataframe(path, layer="points", bbox=bbox)
+            except Exception:
+                return None
+
+    layers = _list_layers(path)
+    signal_layer = next(
+        (name for name, _kind in layers if name.lower() in {"signals", "traffic_signals"}),
+        None,
+    )
+    if signal_layer is None:
+        return None
+    try:
+        return _read_dataframe(path, layer=signal_layer, bbox=bbox)
+    except Exception:
+        return None
 
 
 def _load_signals(
@@ -305,30 +412,10 @@ def _load_signals(
     route_nodes: list[tuple[float, float]],
     radius_m: float = 18.0,
 ) -> list[dict[str, float]]:
-    import pyogrio
     from pyproj import Transformer
     from shapely.geometry import LineString, Point
 
-    try:
-        layers = pyogrio.list_layers(path)
-        layer_names = [str(item[0]) for item in layers]
-        signal_layer = next(
-            (name for name in layer_names if name.lower() in {"signals", "traffic_signals"}),
-            None,
-        )
-        if signal_layer is None:
-            return []
-        try:
-            signals = pyogrio.read_dataframe(
-                path, layer=signal_layer, bbox=bbox, use_arrow=True, force_2d=True
-            )
-        except (TypeError, ValueError):
-            signals = pyogrio.read_dataframe(
-                path, layer=signal_layer, bbox=bbox, force_2d=True
-            )
-    except Exception:
-        return []
-
+    signals = _read_signal_features(path, bbox)
     if signals is None or signals.empty:
         return []
 
@@ -336,7 +423,11 @@ def _load_signals(
     metric_route = LineString([transformer.transform(lon, lat) for lon, lat in route_nodes])
     matches: list[dict[str, float]] = []
 
-    for geometry in signals.geometry:
+    for record in signals.to_dict("records"):
+        record = _enrich_record(record)
+        if _is_pbf(path) and _text(record.get("highway")) != "traffic_signals":
+            continue
+        geometry = record.get("geometry")
         if geometry is None:
             continue
         points = [geometry] if geometry.geom_type == "Point" else list(getattr(geometry, "geoms", []))
@@ -364,13 +455,11 @@ def calculate_route(
     bbox: dict[str, float],
     max_snap_distance_m: float = 2500.0,
 ) -> dict[str, Any]:
-    """Calculate an offline route through a spatially filtered road dataset.
+    """Calculate an offline route from a spatially filtered local dataset.
 
-    Args:
-        roads_path: FlatGeobuf/GeoPackage/other GDAL-readable road dataset.
-        start: ``(latitude, longitude)``.
-        target: ``(latitude, longitude)``.
-        bbox: Mapping with ``west, south, east, north``.
+    FlatGeobuf or GeoPackage is recommended for repeated routing. OSM PBF is
+    supported as a slower fallback because it is parsed sequentially by GDAL.
+    Coordinates use ``(latitude, longitude)`` at the public interface.
     """
 
     path = Path(roads_path).expanduser().resolve()
@@ -436,5 +525,6 @@ def calculate_route(
             "graph_edges": int(graph.number_of_edges()),
             "start_snap_m": start_snap,
             "target_snap_m": target_snap,
+            "source_type": "osm_pbf" if _is_pbf(path) else "spatial_vector",
         },
     }
