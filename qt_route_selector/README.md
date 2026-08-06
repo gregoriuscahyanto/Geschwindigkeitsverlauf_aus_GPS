@@ -38,6 +38,18 @@ Danach:
 3. Über **Straßendaten wählen** eine lokale Datei auswählen.
 4. **Route berechnen** anklicken.
 
+## Kartenanzeige ohne API-Key
+
+Qt kann seine Anbieterinformationen dynamisch laden. Dabei kann ein Drittanbieter-Kartenstil ausgewählt werden, der einen API-Key verlangt. Die Anwendung deaktiviert diese dynamische Auswahl und verwendet stattdessen ausdrücklich die Standard-Kacheln von OpenStreetMap:
+
+```text
+https://tile.openstreetmap.org/{z}/{x}/{y}.png
+```
+
+Dafür ist kein API-Key nötig. Die Anwendung setzt einen eigenen User-Agent, zeigt die OpenStreetMap-Attribution an, verwendet den Qt-Kachelcache und deaktiviert das Vorladen unsichtbarer Nachbarkacheln.
+
+Die öffentlichen OpenStreetMap-Kacheln sind nur für normale interaktive Anzeige vorgesehen. Sie dürfen nicht automatisiert für große Gebiete oder als Offline-Kartenpaket heruntergeladen werden.
+
 ## Wahl der Straßendaten
 
 ### Empfohlen: FlatGeobuf oder GeoPackage
@@ -94,4 +106,4 @@ Der Router ist als nachvollziehbarer Forschungs- und Simulationsbaustein gedacht
 - detaillierte Kreuzungs- und Abbiegekosten
 - Fahrspuren und Spurwechsel
 
-Die Kartenanzeige verwendet den Qt-OSM-Kartenanbieter. Das Routing ist lokal; Hintergrundkarten benötigen beim erstmaligen Anzeigen jedoch Internetzugriff, solange noch keine Kartenkacheln im Qt-Cache vorhanden sind.
+Das Routing ist vollständig lokal. Die Hintergrundkarte benötigt beim erstmaligen Anzeigen Internetzugriff. Bereits geladene Kacheln können aus dem Qt-Cache wiederverwendet werden; das ist jedoch kein garantiertes Offline-Kartenpaket. Für einen vollständig offline arbeitenden Kartenhintergrund wird später eine lokal bereitgestellte, lizenzkonforme Tile- oder Vektorkartenquelle benötigt.
