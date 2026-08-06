@@ -2,3 +2,13 @@
 augmented/
 results/
 slprj/
+
+# Python virtual environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Local route-selector output
+selected_region.json
+qt_route_selector/selected_region.json
