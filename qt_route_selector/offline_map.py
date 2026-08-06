@@ -251,15 +251,18 @@ class OfflineMapItem(QQuickPaintedItem):
         north = float(bbox["north"])
         top_left = geo_to_world(north, west, 0.0)
         bottom_right = geo_to_world(south, east, 0.0)
-        normalized_width = max(1e-12, abs(bottom_right.x() - top_left.x()))
-        normalized_height = max(1e-12, abs(bottom_right.y() - top_left.y()))
+        width_at_zoom_zero = max(1e-12, abs(bottom_right.x() - top_left.x()))
+        height_at_zoom_zero = max(1e-12, abs(bottom_right.y() - top_left.y()))
         usable_width = max(1.0, self.width() - 2.0 * padding)
         usable_height = max(1.0, self.height() - 2.0 * padding)
-        zoom_x = math.log2(usable_width / normalized_width / TILE_SIZE)
-        zoom_y = math.log2(usable_height / normalized_height / TILE_SIZE)
+        zoom_x = math.log2(usable_width / width_at_zoom_zero)
+        zoom_y = math.log2(usable_height / height_at_zoom_zero)
         zoom = max(3.0, min(20.0, min(zoom_x, zoom_y)))
-        self._center_latitude = (north + south) / 2.0
-        self._center_longitude = (west + east) / 2.0
+        center_x = (top_left.x() + bottom_right.x()) / 2.0
+        center_y = (top_left.y() + bottom_right.y()) / 2.0
+        center_latitude, center_longitude = world_to_geo(center_x, center_y, 0.0)
+        self._center_latitude = center_latitude
+        self._center_longitude = center_longitude
         self._zoom_level = zoom
         self.centerChanged.emit()
         self.zoomLevelChanged.emit()
