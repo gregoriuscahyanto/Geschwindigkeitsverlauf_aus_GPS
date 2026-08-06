@@ -1,6 +1,6 @@
 # Python-Umgebung einrichten
 
-Empfohlen wird Python 3.11 (64-bit). Die virtuelle Umgebung wird direkt im Repository unter `.venv` angelegt und ist über `.gitignore` vom Commit ausgeschlossen.
+Empfohlen wird Python 3.11 (64 Bit). Die virtuelle Umgebung liegt im Repository unter `.venv`.
 
 ## Windows PowerShell
 
@@ -8,69 +8,42 @@ Empfohlen wird Python 3.11 (64-bit). Die virtuelle Umgebung wird direkt im Repos
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install -r qt_route_selector\requirements.txt
 ```
 
-Falls die Aktivierung durch die PowerShell-Ausführungsrichtlinie blockiert wird, kann die Umgebung ohne Aktivierung verwendet werden:
+Ohne Aktivierung der virtuellen Umgebung:
 
 ```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-## Nur die Qt-Routen- und Simulationsanwendung installieren
-
-```powershell
-py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r qt_route_selector\requirements.txt
 ```
 
-Nach einem Git-Update muss `.venv` nicht neu erstellt werden. Die Requirements erneut zu installieren reicht aus:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r qt_route_selector\requirements.txt
-```
-
-## Karte und Live-Geschwindigkeitsverlauf gemeinsam starten
-
-Mit aktivierter virtueller Umgebung:
-
-```powershell
-python qt_route_selector\complete_app.py
-```
-
-Ohne Aktivierung:
+## Anwendung starten
 
 ```powershell
 .\.venv\Scripts\python.exe qt_route_selector\complete_app.py
 ```
 
-Dabei öffnen sich der Routenplaner und das Live-Simulationsfenster gemeinsam. Nach einer neuen Routenberechnung wird `route_result.json` automatisch neu geladen.
+Es öffnet sich **ein Fenster mit zwei Tabs**:
 
-## Einzelne Anwendungen starten
+1. `Route und Karte`
+2. `Geschwindigkeitsverlauf`
 
-Nur Routenplaner:
+Nach einer neuen Routenberechnung wird die Simulation im zweiten Tab automatisch aktualisiert.
+
+## Nach einem Git-Update
+
+Die `.venv` muss nicht neu erstellt werden:
 
 ```powershell
-.\.venv\Scripts\python.exe qt_route_selector\main.py
+git fetch origin
+git pull --ff-only origin feature/qt-route-selector
+.\.venv\Scripts\python.exe -m pip install -r qt_route_selector\requirements.txt
+.\.venv\Scripts\python.exe qt_route_selector\complete_app.py
 ```
 
-Nur Live-Simulation und Plots:
-
-```powershell
-.\.venv\Scripts\python.exe qt_route_selector\live_speed_profile.py
-```
-
-Die Anwendung verwendet standardmäßig die schnelle Online-OSM-Karte und schaltet im Modus **Automatisch** bei fehlender Verbindung auf die lokale Vektorkarte um. Das Routing verwendet immer die ausgewählte lokale `.osm.pbf`, `.gpkg`, `.fgb`, `.geojson` oder `.shp`.
-
-Bei einer großen PBF empfiehlt sich nach der Auswahl die einmalige Schaltfläche **PBF-Schnellindex erstellen**. Sie erzeugt ein räumlich indiziertes `*_routing.gpkg`, das anschließend automatisch verwendet wird.
-
-## Tests ausführen
+## Tests
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s qt_route_selector\tests -v
 ```
-
-Weitere Hinweise zu Kartenmodi, Zwischenzielen, Fahrerprofilen, Live-Parametern und Export stehen in `qt_route_selector/README.md`.
