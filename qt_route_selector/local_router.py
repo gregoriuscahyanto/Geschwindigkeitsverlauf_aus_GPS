@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -22,9 +23,37 @@ DEFAULT_SPEED_KMH = {
     "residential": 30.0,
     "living_street": 10.0,
     "service": 20.0,
+    "track": 15.0,
+}
+
+ROAD_PRIORITY_FACTOR = {
+    "motorway": 0.72,
+    "motorway_link": 0.80,
+    "trunk": 0.80,
+    "trunk_link": 0.86,
+    "primary": 0.88,
+    "primary_link": 0.94,
+    "secondary": 0.98,
+    "secondary_link": 1.02,
+    "tertiary": 1.07,
+    "tertiary_link": 1.10,
+    "unclassified": 1.18,
+    "residential": 1.30,
+    "living_street": 1.50,
+    "service": 1.55,
+    "track": 1.80,
+}
+
+ROUTING_PROFILE_WEIGHTS = {
+    "preferred": "preferred_time_s",
+    "fastest": "travel_time_s",
+    "shortest": "distance_m",
 }
 
 _HSTORE_TAG = re.compile(r'"([^"]+)"=>"([^"]*)"')
+_REF_TOKEN = re.compile(r"(?:^|[;,/\s])([ABLK])\s*([0-9]+)", re.IGNORECASE)
+_GRAPH_CACHE: "OrderedDict[tuple[Any, ...], tuple[Any, Any, Any, int]]" = OrderedDict()
+_GRAPH_CACHE_LIMIT = 2
 
 
 class RoutingError(RuntimeError):
@@ -196,7 +225,7 @@ def _read_dataframe(
 
     try:
         return pyogrio.read_dataframe(path, **arguments)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RuntimeError):
         arguments.pop("use_arrow", None)
         return pyogrio.read_dataframe(path, **arguments)
 
@@ -228,9 +257,47 @@ def _load_roads(path: Path, bbox: tuple[float, float, float, float]) -> Any:
     return roads
 
 
+def _road_reference_kind(reference: str) -> str:
+    match = _REF_TOKEN.search(reference.upper())
+    return match.group(1).upper() if match else ""
+
+
+def _road_category(highway: str, reference: str) -> str:
+    ref_kind = _road_reference_kind(reference)
+    if highway.startswith("motorway") or ref_kind == "A":
+        return "autobahn"
+    if ref_kind == "B":
+        return "bundesstrasse"
+    if ref_kind == "L":
+        return "landstrasse"
+    if ref_kind == "K":
+        return "kreisstrasse"
+    if highway in {"trunk", "trunk_link", "primary", "primary_link"}:
+        return "hauptstrasse"
+    if highway in {"secondary", "secondary_link", "tertiary", "tertiary_link"}:
+        return "regionalstrasse"
+    return "seitenstrasse"
+
+
+def _road_priority_factor(highway: str, reference: str) -> float:
+    factor = ROAD_PRIORITY_FACTOR.get(highway, 1.35)
+    ref_kind = _road_reference_kind(reference)
+    if ref_kind == "A":
+        return min(factor, 0.72)
+    if ref_kind == "B":
+        return min(factor, 0.88)
+    if ref_kind == "L":
+        return min(factor, 0.98)
+    if ref_kind == "K":
+        return min(factor, 1.06)
+    return factor
+
+
 def _add_edge(graph: Any, source: Any, target: Any, attributes: dict[str, Any]) -> None:
     existing = graph.get_edge_data(source, target)
-    if existing is None or attributes["travel_time_s"] < existing["travel_time_s"]:
+    if existing is None or (
+        attributes["travel_time_s"], attributes["distance_m"]
+    ) < (existing["travel_time_s"], existing["distance_m"]):
         graph.add_edge(source, target, **attributes)
 
 
@@ -246,6 +313,7 @@ def _build_graph(roads: Any) -> tuple[Any, dict[tuple[float, float], tuple[float
         if not highway or _is_blocked(record):
             continue
 
+        reference = _text(record.get("ref"))
         maxspeed = _parse_maxspeed(
             _record_value(
                 record,
@@ -258,13 +326,16 @@ def _build_graph(roads: Any) -> tuple[Any, dict[tuple[float, float], tuple[float
         )
         speed_mps = maxspeed / 3.6
         direction = _oneway_mode(record)
+        priority_factor = _road_priority_factor(highway, reference)
         common = {
             "highway": highway,
             "maxspeed_kmh": maxspeed,
             "surface": _text(record.get("surface")),
             "name": _text(record.get("name")),
-            "ref": _text(record.get("ref")),
+            "ref": reference,
             "oneway": direction != "both",
+            "road_category": _road_category(highway, reference),
+            "priority_factor": priority_factor,
         }
 
         for line in _iter_lines(record.get("geometry")):
@@ -280,10 +351,12 @@ def _build_graph(roads: Any) -> tuple[Any, dict[tuple[float, float], tuple[float
 
                 node_positions[source] = source
                 node_positions[target] = target
+                travel_time_s = distance_m / speed_mps
                 attributes = {
                     **common,
                     "distance_m": distance_m,
-                    "travel_time_s": distance_m / speed_mps,
+                    "travel_time_s": travel_time_s,
+                    "preferred_time_s": travel_time_s * priority_factor,
                 }
                 if direction == "forward":
                     _add_edge(graph, source, target, attributes)
@@ -298,11 +371,9 @@ def _build_graph(roads: Any) -> tuple[Any, dict[tuple[float, float], tuple[float
     return graph, node_positions
 
 
-def _nearest_nodes(
+def _build_node_index(
     node_positions: dict[tuple[float, float], tuple[float, float]],
-    point_lat_lon: tuple[float, float],
-    count: int = 12,
-) -> list[tuple[tuple[float, float], float]]:
+) -> tuple[list[tuple[float, float]], Any, Any]:
     import numpy as np
     from pyproj import Transformer
 
@@ -311,6 +382,20 @@ def _nearest_nodes(
     latitudes = np.asarray([node[1] for node in nodes], dtype=float)
     transformer = Transformer.from_crs(4326, 3857, always_xy=True)
     x, y = transformer.transform(longitudes, latitudes)
+    return nodes, np.asarray(x), np.asarray(y)
+
+
+def _nearest_nodes(
+    node_positions: dict[tuple[float, float], tuple[float, float]],
+    point_lat_lon: tuple[float, float],
+    count: int = 12,
+    node_index: tuple[list[tuple[float, float]], Any, Any] | None = None,
+) -> list[tuple[tuple[float, float], float]]:
+    import numpy as np
+    from pyproj import Transformer
+
+    nodes, x, y = node_index or _build_node_index(node_positions)
+    transformer = Transformer.from_crs(4326, 3857, always_xy=True)
     point_x, point_y = transformer.transform(point_lat_lon[1], point_lat_lon[0])
     distances = np.hypot(x - point_x, y - point_y)
     indexes = np.argsort(distances)[: min(count, len(nodes))]
@@ -323,11 +408,14 @@ def _shortest_path_with_snapping(
     start: tuple[float, float],
     target: tuple[float, float],
     max_snap_distance_m: float,
+    *,
+    weight: str = "travel_time_s",
+    node_index: tuple[list[tuple[float, float]], Any, Any] | None = None,
 ) -> tuple[list[Any], float, float]:
     import networkx as nx
 
-    start_candidates = _nearest_nodes(node_positions, start)
-    target_candidates = _nearest_nodes(node_positions, target)
+    start_candidates = _nearest_nodes(node_positions, start, node_index=node_index)
+    target_candidates = _nearest_nodes(node_positions, target, node_index=node_index)
     if not start_candidates or not target_candidates:
         raise RoutingError("Start oder Ziel konnte nicht an das Straßennetz angebunden werden.")
     if start_candidates[0][1] > max_snap_distance_m:
@@ -339,26 +427,40 @@ def _shortest_path_with_snapping(
             f"Der Zielpunkt liegt {target_candidates[0][1]:.0f} m vom Straßennetz entfernt."
         )
 
-    source = ("__route_source__", id(graph))
-    sink = ("__route_sink__", id(graph))
+    source = ("__route_source__", id(graph), id(start))
+    sink = ("__route_sink__", id(graph), id(target))
     graph.add_node(source)
     graph.add_node(sink)
     for candidate, distance in start_candidates:
-        graph.add_edge(source, candidate, travel_time_s=distance / 5.0)
+        snap_time = distance / 5.0
+        graph.add_edge(
+            source,
+            candidate,
+            travel_time_s=snap_time,
+            preferred_time_s=snap_time,
+            distance_m=distance,
+        )
     for candidate, distance in target_candidates:
-        graph.add_edge(candidate, sink, travel_time_s=distance / 5.0)
+        snap_time = distance / 5.0
+        graph.add_edge(
+            candidate,
+            sink,
+            travel_time_s=snap_time,
+            preferred_time_s=snap_time,
+            distance_m=distance,
+        )
 
     try:
         full_path = nx.shortest_path(
             graph,
             source=source,
             target=sink,
-            weight="travel_time_s",
+            weight=weight,
             method="dijkstra",
         )
     except (nx.NetworkXNoPath, nx.NodeNotFound) as exc:
         raise RoutingError(
-            "Zwischen Start und Ziel wurde in der gewählten Region keine befahrbare Route gefunden. "
+            "Zwischen zwei gewählten Punkten wurde in der Region keine befahrbare Route gefunden. "
             "Vergrößere gegebenenfalls den Regionsrand."
         ) from exc
     finally:
@@ -369,7 +471,7 @@ def _shortest_path_with_snapping(
 
     node_path = full_path[1:-1]
     if len(node_path) < 2:
-        raise RoutingError("Start und Ziel liegen nach dem Snapping auf demselben Straßenknoten.")
+        raise RoutingError("Zwei Punkte liegen nach dem Snapping auf demselben Straßenknoten.")
     start_snap = _haversine_m((start[1], start[0]), node_path[0])
     target_snap = _haversine_m((target[1], target[0]), node_path[-1])
     return node_path, start_snap, target_snap
@@ -416,7 +518,7 @@ def _load_signals(
     from shapely.geometry import LineString, Point
 
     signals = _read_signal_features(path, bbox)
-    if signals is None or signals.empty:
+    if signals is None or signals.empty or len(route_nodes) < 2:
         return []
 
     transformer = Transformer.from_crs(4326, 3857, always_xy=True)
@@ -448,19 +550,64 @@ def _load_signals(
     return matches
 
 
+def _graph_cache_key(
+    path: Path,
+    bbox: tuple[float, float, float, float],
+) -> tuple[Any, ...]:
+    stat = path.stat()
+    return (
+        str(path),
+        stat.st_mtime_ns,
+        stat.st_size,
+        *(round(value, 4) for value in bbox),
+    )
+
+
+def _get_graph(
+    path: Path,
+    bbox: tuple[float, float, float, float],
+) -> tuple[Any, dict[tuple[float, float], tuple[float, float]], Any, int, bool]:
+    key = _graph_cache_key(path, bbox)
+    cached = _GRAPH_CACHE.get(key)
+    if cached is not None:
+        _GRAPH_CACHE.move_to_end(key)
+        graph, node_positions, node_index, loaded_features = cached
+        return graph, node_positions, node_index, loaded_features, True
+
+    roads = _load_roads(path, bbox)
+    graph, node_positions = _build_graph(roads)
+    node_index = _build_node_index(node_positions)
+    value = (graph, node_positions, node_index, int(len(roads)))
+    _GRAPH_CACHE[key] = value
+    _GRAPH_CACHE.move_to_end(key)
+    while len(_GRAPH_CACHE) > _GRAPH_CACHE_LIMIT:
+        _GRAPH_CACHE.popitem(last=False)
+    return graph, node_positions, node_index, int(len(roads)), False
+
+
+def _profile_weight(profile: str) -> str:
+    return ROUTING_PROFILE_WEIGHTS.get(profile, ROUTING_PROFILE_WEIGHTS["preferred"])
+
+
 def calculate_route(
     roads_path: str | Path,
-    start: tuple[float, float],
-    target: tuple[float, float],
-    bbox: dict[str, float],
+    start: tuple[float, float] | None = None,
+    target: tuple[float, float] | None = None,
+    bbox: dict[str, float] | None = None,
     max_snap_distance_m: float = 2500.0,
+    *,
+    points: list[tuple[float, float]] | None = None,
+    routing_profile: str = "preferred",
 ) -> dict[str, Any]:
-    """Calculate an offline route from a spatially filtered local dataset.
+    """Calculate a local route through two or more ordered GPS points."""
 
-    FlatGeobuf or GeoPackage is recommended for repeated routing. OSM PBF is
-    supported as a slower fallback because it is parsed sequentially by GDAL.
-    Coordinates use ``(latitude, longitude)`` at the public interface.
-    """
+    selected_points = list(points or [])
+    if not selected_points and start is not None and target is not None:
+        selected_points = [start, target]
+    if len(selected_points) < 2:
+        raise RoutingError("Für eine Route werden mindestens zwei GPS-Punkte benötigt.")
+    if bbox is None:
+        raise RoutingError("Für das lokale Routing fehlt die räumliche Begrenzung.")
 
     path = Path(roads_path).expanduser().resolve()
     if not path.is_file():
@@ -472,59 +619,139 @@ def calculate_route(
         float(bbox["east"]),
         float(bbox["north"]),
     )
-    roads = _load_roads(path, read_bbox)
-    graph, node_positions = _build_graph(roads)
-    node_path, start_snap, target_snap = _shortest_path_with_snapping(
-        graph,
-        node_positions,
-        start,
-        target,
-        max_snap_distance_m,
+    graph, node_positions, node_index, loaded_features, cache_hit = _get_graph(
+        path, read_bbox
     )
+    weight = _profile_weight(routing_profile)
 
-    coordinates = [
-        {"latitude": float(node[1]), "longitude": float(node[0])}
-        for node in node_path
-    ]
+    route_nodes: list[tuple[float, float]] = []
     segments: list[dict[str, Any]] = []
-    distance_m = 0.0
-    travel_time_s = 0.0
+    legs: list[dict[str, Any]] = []
+    total_distance_m = 0.0
+    total_travel_time_s = 0.0
+    snap_distances: list[float] = []
 
-    for index, (source, destination) in enumerate(zip(node_path[:-1], node_path[1:])):
-        edge = graph[source][destination]
-        distance_m += float(edge["distance_m"])
-        travel_time_s += float(edge["travel_time_s"])
-        segments.append(
+    for leg_index, (leg_start, leg_target) in enumerate(
+        zip(selected_points[:-1], selected_points[1:])
+    ):
+        node_path, start_snap, target_snap = _shortest_path_with_snapping(
+            graph,
+            node_positions,
+            leg_start,
+            leg_target,
+            max_snap_distance_m,
+            weight=weight,
+            node_index=node_index,
+        )
+        snap_distances.extend((start_snap, target_snap))
+        leg_distance_m = 0.0
+        leg_travel_time_s = 0.0
+
+        if not route_nodes:
+            route_nodes.extend(node_path)
+            base_index = 0
+        elif route_nodes[-1] == node_path[0]:
+            base_index = len(route_nodes) - 1
+            route_nodes.extend(node_path[1:])
+        else:
+            connector_source = route_nodes[-1]
+            connector_target = node_path[0]
+            connector_distance = _haversine_m(connector_source, connector_target)
+            connector_time = connector_distance / 5.0
+            connector_from = len(route_nodes) - 1
+            route_nodes.append(connector_target)
+            segments.append(
+                {
+                    "from_index": connector_from,
+                    "to_index": connector_from + 1,
+                    "leg_index": leg_index,
+                    "distance_m": connector_distance,
+                    "travel_time_s": connector_time,
+                    "maxspeed_kmh": 18.0,
+                    "highway": "waypoint_connector",
+                    "surface": "",
+                    "name": "Zwischenziel-Anbindung",
+                    "ref": "",
+                    "oneway": False,
+                    "road_category": "connector",
+                    "priority_factor": 1.0,
+                    "connector": True,
+                }
+            )
+            total_distance_m += connector_distance
+            total_travel_time_s += connector_time
+            leg_distance_m += connector_distance
+            leg_travel_time_s += connector_time
+            base_index = len(route_nodes) - 1
+            route_nodes.extend(node_path[1:])
+
+        for local_index, (source, destination) in enumerate(
+            zip(node_path[:-1], node_path[1:])
+        ):
+            edge = graph[source][destination]
+            distance_m = float(edge["distance_m"])
+            travel_time_s = float(edge["travel_time_s"])
+            total_distance_m += distance_m
+            total_travel_time_s += travel_time_s
+            leg_distance_m += distance_m
+            leg_travel_time_s += travel_time_s
+            segments.append(
+                {
+                    "from_index": base_index + local_index,
+                    "to_index": base_index + local_index + 1,
+                    "leg_index": leg_index,
+                    "distance_m": distance_m,
+                    "travel_time_s": travel_time_s,
+                    "maxspeed_kmh": float(edge["maxspeed_kmh"]),
+                    "highway": edge.get("highway", ""),
+                    "surface": edge.get("surface", ""),
+                    "name": edge.get("name", ""),
+                    "ref": edge.get("ref", ""),
+                    "oneway": bool(edge.get("oneway", False)),
+                    "road_category": edge.get("road_category", ""),
+                    "priority_factor": float(edge.get("priority_factor", 1.0)),
+                    "connector": False,
+                }
+            )
+
+        legs.append(
             {
-                "from_index": index,
-                "to_index": index + 1,
-                "distance_m": float(edge["distance_m"]),
-                "travel_time_s": float(edge["travel_time_s"]),
-                "maxspeed_kmh": float(edge["maxspeed_kmh"]),
-                "highway": edge.get("highway", ""),
-                "surface": edge.get("surface", ""),
-                "name": edge.get("name", ""),
-                "ref": edge.get("ref", ""),
-                "oneway": bool(edge.get("oneway", False)),
+                "index": leg_index,
+                "from_point_index": leg_index,
+                "to_point_index": leg_index + 1,
+                "distance_km": leg_distance_m / 1000.0,
+                "estimated_minutes": leg_travel_time_s / 60.0,
+                "start_snap_m": start_snap,
+                "target_snap_m": target_snap,
             }
         )
 
-    signals = _load_signals(path, read_bbox, node_path)
+    coordinates = [
+        {"latitude": float(node[1]), "longitude": float(node[0])}
+        for node in route_nodes
+    ]
+    signals = _load_signals(path, read_bbox, route_nodes)
     return {
         "coordinates": coordinates,
         "segments": segments,
+        "legs": legs,
         "traffic_signals": signals,
         "summary": {
-            "distance_km": distance_m / 1000.0,
-            "estimated_minutes": travel_time_s / 60.0,
+            "distance_km": total_distance_m / 1000.0,
+            "estimated_minutes": total_travel_time_s / 60.0,
             "route_points": len(coordinates),
             "road_segments": len(segments),
             "traffic_signals": len(signals),
-            "loaded_features": int(len(roads)),
+            "loaded_features": loaded_features,
             "graph_nodes": int(graph.number_of_nodes()),
             "graph_edges": int(graph.number_of_edges()),
-            "start_snap_m": start_snap,
-            "target_snap_m": target_snap,
+            "start_snap_m": snap_distances[0] if snap_distances else 0.0,
+            "target_snap_m": snap_distances[-1] if snap_distances else 0.0,
+            "max_snap_m": max(snap_distances, default=0.0),
+            "waypoints": max(0, len(selected_points) - 2),
+            "legs": len(legs),
+            "routing_profile": routing_profile,
+            "graph_cache_hit": cache_hit,
             "source_type": "osm_pbf" if _is_pbf(path) else "spatial_vector",
         },
     }
