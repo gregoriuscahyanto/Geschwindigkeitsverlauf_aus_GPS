@@ -18,3 +18,5 @@ qt_route_selector/route_result.json
 # Generated local routing indexes
 *_routing.gpkg
 *.building.gpkg
+
+*.osm.pbf
