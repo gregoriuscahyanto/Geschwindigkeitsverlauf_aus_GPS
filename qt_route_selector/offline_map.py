@@ -12,7 +12,6 @@ EARTH_RADIUS_M = 6_378_137.0
 TILE_SIZE = 256.0
 MAX_MERCATOR_LATITUDE = 85.05112878
 
-
 ROAD_STYLES: dict[str, tuple[str, float]] = {
     "motorway": ("#d88b52", 4.8),
     "motorway_link": ("#e1a16e", 3.6),
@@ -69,11 +68,7 @@ def _nice_scale_length(value_m: float) -> float:
 
 
 class OfflineMapItem(QQuickPaintedItem):
-    """Simple native vector map for local OSM-derived road geometries.
-
-    The item performs Web-Mercator projection, pan/zoom interaction and
-    coordinate selection itself. It never requests network resources.
-    """
+    """Native vector fallback map that never requests network resources."""
 
     coordinateClicked = Signal(float, float)
     viewportChanged = Signal("QVariantMap")
@@ -89,14 +84,11 @@ class OfflineMapItem(QQuickPaintedItem):
         self._center_latitude = 48.743
         self._center_longitude = 9.320
         self._zoom_level = 12.0
-
         self._roads: list[dict[str, Any]] = []
         self._route: list[tuple[float, float]] = []
         self._signals: list[tuple[float, float, float]] = []
-        self._start: tuple[float, float] | None = None
-        self._target: tuple[float, float] | None = None
+        self._selection_points: list[tuple[float, float]] = []
         self._selection_bbox: dict[str, float] | None = None
-
         self._pressed = False
         self._press_position = QPointF()
         self._last_position = QPointF()
@@ -156,6 +148,14 @@ class OfflineMapItem(QQuickPaintedItem):
             world.y() - center.y() + self.height() / 2.0,
         )
 
+    def _world_zero_to_screen(self, point: tuple[float, float]) -> QPointF:
+        scale = 2.0**self._zoom_level
+        center = self._center_world()
+        return QPointF(
+            point[0] * scale - center.x() + self.width() / 2.0,
+            point[1] * scale - center.y() + self.height() / 2.0,
+        )
+
     def _screen_to_geo(self, x: float, y: float) -> tuple[float, float]:
         center = self._center_world()
         world_x = center.x() + x - self.width() / 2.0
@@ -178,22 +178,24 @@ class OfflineMapItem(QQuickPaintedItem):
         roads: list[dict[str, Any]] = []
         for feature in features or []:
             raw_coordinates = feature.get("coordinates", [])
-            coordinates: list[tuple[float, float]] = []
+            world_coordinates: list[tuple[float, float]] = []
             for index in range(0, len(raw_coordinates) - 1, 2):
-                coordinates.append(
-                    (
-                        float(raw_coordinates[index]),
-                        float(raw_coordinates[index + 1]),
-                    )
-                )
-            if len(coordinates) >= 2:
-                roads.append(
-                    {
-                        "highway": str(feature.get("highway", "")),
-                        "rank": int(feature.get("rank", 0)),
-                        "coordinates": coordinates,
-                    }
-                )
+                latitude = float(raw_coordinates[index])
+                longitude = float(raw_coordinates[index + 1])
+                world = geo_to_world(latitude, longitude, 0.0)
+                world_coordinates.append((world.x(), world.y()))
+            if len(world_coordinates) < 2:
+                continue
+            xs = [point[0] for point in world_coordinates]
+            ys = [point[1] for point in world_coordinates]
+            roads.append(
+                {
+                    "highway": str(feature.get("highway", "")),
+                    "rank": int(feature.get("rank", 0)),
+                    "world": world_coordinates,
+                    "bounds": (min(xs), min(ys), max(xs), max(ys)),
+                }
+            )
         self._roads = sorted(roads, key=lambda item: item["rank"])
         self.update()
 
@@ -222,16 +224,11 @@ class OfflineMapItem(QQuickPaintedItem):
     @Slot("QVariantMap")
     def setSelection(self, payload: dict[str, Any]) -> None:
         points = payload.get("points", []) if payload else []
-        self._start = (
-            (float(points[0][0]), float(points[0][1]))
-            if len(points) >= 1
-            else None
-        )
-        self._target = (
-            (float(points[1][0]), float(points[1][1]))
-            if len(points) >= 2
-            else None
-        )
+        self._selection_points = [
+            (float(point[0]), float(point[1]))
+            for point in points
+            if len(point) >= 2
+        ]
         bbox = payload.get("bbox") if payload else None
         self._selection_bbox = dict(bbox) if bbox else None
         self.update()
@@ -306,10 +303,8 @@ class OfflineMapItem(QQuickPaintedItem):
         new_zoom = max(3.0, min(20.0, old_zoom + math.log2(factor)))
         if math.isclose(old_zoom, new_zoom):
             return
-
         anchor_latitude, anchor_longitude = self._screen_to_geo(
-            position.x(),
-            position.y(),
+            position.x(), position.y()
         )
         anchor_world = geo_to_world(anchor_latitude, anchor_longitude, new_zoom)
         center_world = QPointF(
@@ -317,9 +312,7 @@ class OfflineMapItem(QQuickPaintedItem):
             anchor_world.y() - position.y() + self.height() / 2.0,
         )
         latitude, longitude = world_to_geo(
-            center_world.x(),
-            center_world.y(),
-            new_zoom,
+            center_world.x(), center_world.y(), new_zoom
         )
         self._zoom_level = new_zoom
         self._center_latitude = latitude
@@ -357,8 +350,7 @@ class OfflineMapItem(QQuickPaintedItem):
         self._pressed = False
         if self._drag_distance < 6.0:
             latitude, longitude = self._screen_to_geo(
-                event.position().x(),
-                event.position().y(),
+                event.position().x(), event.position().y()
             )
             self.coordinateClicked.emit(latitude, longitude)
         else:
@@ -384,7 +376,32 @@ class OfflineMapItem(QQuickPaintedItem):
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         return pen
 
-    def _draw_polyline(
+    def _road_visible(self, bounds: tuple[float, float, float, float]) -> bool:
+        scale = 2.0**self._zoom_level
+        center = self._center_world()
+        left = bounds[0] * scale - center.x() + self.width() / 2.0
+        top = bounds[1] * scale - center.y() + self.height() / 2.0
+        right = bounds[2] * scale - center.x() + self.width() / 2.0
+        bottom = bounds[3] * scale - center.y() + self.height() / 2.0
+        margin = 20.0
+        return not (
+            right < -margin
+            or left > self.width() + margin
+            or bottom < -margin
+            or top > self.height() + margin
+        )
+
+    def _draw_world_polyline(self, painter: QPainter, road: dict[str, Any]) -> None:
+        if not self._road_visible(road["bounds"]):
+            return
+        points = QPolygonF(
+            [self._world_zero_to_screen(point) for point in road["world"]]
+        )
+        if len(points) >= 2:
+            painter.setPen(self._road_pen(road["highway"]))
+            painter.drawPolyline(points)
+
+    def _draw_geo_polyline(
         self,
         painter: QPainter,
         coordinates: list[tuple[float, float]],
@@ -403,11 +420,20 @@ class OfflineMapItem(QQuickPaintedItem):
         coordinate: tuple[float, float],
         fill: QColor,
         radius: float,
+        label: str = "",
     ) -> None:
         point = self._geo_to_screen(*coordinate)
         painter.setPen(QPen(QColor("white"), 2.5))
         painter.setBrush(fill)
         painter.drawEllipse(point, radius, radius)
+        if label:
+            painter.setPen(QColor("white"))
+            painter.setFont(QFont("Sans Serif", 8, QFont.Weight.Bold))
+            painter.drawText(
+                QRectF(point.x() - radius, point.y() - radius, radius * 2.0, radius * 2.0),
+                Qt.AlignmentFlag.AlignCenter,
+                label,
+            )
 
     def _draw_selection_bbox(self, painter: QPainter) -> None:
         if not self._selection_bbox:
@@ -458,35 +484,31 @@ class OfflineMapItem(QQuickPaintedItem):
         painter.fillRect(self.boundingRect(), QColor("#edf0ea"))
 
         for road in self._roads:
-            self._draw_polyline(
-                painter,
-                road["coordinates"],
-                self._road_pen(road["highway"]),
-            )
+            self._draw_world_polyline(painter, road)
 
         self._draw_selection_bbox(painter)
-
         if len(self._route) >= 2:
             route_pen = QPen(QColor("#1769d2"), 6.0)
             route_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             route_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            self._draw_polyline(painter, self._route, route_pen)
+            self._draw_geo_polyline(painter, self._route, route_pen)
 
         for latitude, longitude, _distance in self._signals:
             self._draw_marker(
-                painter,
-                (latitude, longitude),
-                QColor("#e02b2b"),
-                4.5,
+                painter, (latitude, longitude), QColor("#e02b2b"), 4.5
             )
 
-        if self._start:
-            self._draw_marker(painter, self._start, QColor("#18883a"), 9.0)
-        if self._target:
-            self._draw_marker(painter, self._target, QColor("#c62828"), 9.0)
+        last_index = len(self._selection_points) - 1
+        for index, coordinate in enumerate(self._selection_points):
+            if index == 0:
+                color, label = QColor("#18883a"), "S"
+            elif index == last_index:
+                color, label = QColor("#c62828"), "Z"
+            else:
+                color, label = QColor("#ef8b1e"), str(index)
+            self._draw_marker(painter, coordinate, color, 9.0, label)
 
         self._draw_scale(painter)
-
         painter.setFont(QFont("Sans Serif", 8))
         painter.setPen(QColor("#596067"))
         painter.drawText(
@@ -501,5 +523,5 @@ class OfflineMapItem(QQuickPaintedItem):
             painter.drawText(
                 self.boundingRect().adjusted(30.0, 30.0, -30.0, -30.0),
                 Qt.AlignmentFlag.AlignCenter,
-                "Straßendatei wählen und den Kartenausschnitt laden",
+                "Offline-Karte: Straßendaten bzw. Schnellindex laden",
             )
