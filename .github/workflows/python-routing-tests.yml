@@ -38,7 +38,7 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s qt_route_selector/tests -v
 
-      - name: Load Qt applications offscreen
+      - name: Load unified Qt application offscreen
         run: |
           python - <<'PY'
           import sys
@@ -47,28 +47,17 @@ jobs:
           app_dir = Path("qt_route_selector").resolve()
           sys.path.insert(0, str(app_dir))
 
-          from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
           from PySide6.QtWidgets import QApplication
-          from live_speed_profile import LiveSpeedProfileWindow
-          from main import RoutePointModel, RouteSelector, TrafficSignalModel
-          from offline_map import OfflineMapItem
+          from complete_app import CompleteApplicationWindow
 
           app = QApplication([])
-          qmlRegisterType(OfflineMapItem, "OfflineMap", 1, 0, "OfflineMapItem")
-          engine = QQmlApplicationEngine()
-          route_points = RoutePointModel()
-          traffic_signals = TrafficSignalModel()
-          selector = RouteSelector(route_points, traffic_signals)
-          selector.setMapPreference("offline")
-          engine.rootContext().setContextProperty("routeSelector", selector)
-          engine.rootContext().setContextProperty("routePointModel", route_points)
-          engine.rootContext().setContextProperty("trafficSignalModel", traffic_signals)
-          engine.load(str(app_dir / "main.qml"))
-          if not engine.rootObjects():
-              raise SystemExit("QML application could not be created")
-
-          simulator = LiveSpeedProfileWindow(app_dir / "missing-route-result.json")
-          if simulator.windowTitle() != "Live-Geschwindigkeitsverlauf":
-              raise SystemExit("Live simulation window could not be created")
-          print("Qt applications loaded successfully")
+          window = CompleteApplicationWindow(force_offline=True)
+          if window.tabs.count() != 2:
+              raise SystemExit("Unified application does not contain two tabs")
+          if "Route" not in window.tabs.tabText(0):
+              raise SystemExit("Routing tab was not created")
+          if "Geschwindigkeitsverlauf" not in window.tabs.tabText(1):
+              raise SystemExit("Simulation tab was not created")
+          print("Unified Qt application loaded successfully")
+          window.close()
           PY
