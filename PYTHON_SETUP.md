@@ -19,7 +19,7 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-## Nur die Qt-Routenanwendung installieren
+## Nur die Qt-Routen- und Simulationsanwendung installieren
 
 ```powershell
 py -3.11 -m venv .venv
@@ -33,18 +33,34 @@ Nach einem Git-Update muss `.venv` nicht neu erstellt werden. Die Requirements e
 .\.venv\Scripts\python.exe -m pip install -r qt_route_selector\requirements.txt
 ```
 
-## Anwendung starten
+## Karte und Live-Geschwindigkeitsverlauf gemeinsam starten
 
 Mit aktivierter virtueller Umgebung:
 
 ```powershell
-python qt_route_selector\main.py
+python qt_route_selector\complete_app.py
 ```
 
 Ohne Aktivierung:
 
 ```powershell
+.\.venv\Scripts\python.exe qt_route_selector\complete_app.py
+```
+
+Dabei öffnen sich der Routenplaner und das Live-Simulationsfenster gemeinsam. Nach einer neuen Routenberechnung wird `route_result.json` automatisch neu geladen.
+
+## Einzelne Anwendungen starten
+
+Nur Routenplaner:
+
+```powershell
 .\.venv\Scripts\python.exe qt_route_selector\main.py
+```
+
+Nur Live-Simulation und Plots:
+
+```powershell
+.\.venv\Scripts\python.exe qt_route_selector\live_speed_profile.py
 ```
 
 Die Anwendung verwendet standardmäßig die schnelle Online-OSM-Karte und schaltet im Modus **Automatisch** bei fehlender Verbindung auf die lokale Vektorkarte um. Das Routing verwendet immer die ausgewählte lokale `.osm.pbf`, `.gpkg`, `.fgb`, `.geojson` oder `.shp`.
@@ -57,4 +73,4 @@ Bei einer großen PBF empfiehlt sich nach der Auswahl die einmalige Schaltfläch
 .\.venv\Scripts\python.exe -m unittest discover -s qt_route_selector\tests -v
 ```
 
-Weitere Hinweise zu Kartenmodi, Zwischenzielen, Routingprofilen und dem Schnellindex stehen in `qt_route_selector/README.md`.
+Weitere Hinweise zu Kartenmodi, Zwischenzielen, Fahrerprofilen, Live-Parametern und Export stehen in `qt_route_selector/README.md`.
