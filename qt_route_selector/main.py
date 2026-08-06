@@ -6,11 +6,58 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, Property, QSettings, QThread, Signal, Slot
-from PySide6.QtWidgets import QApplication, QFileDialog
+from PySide6.QtCore import (
+    QAbstractListModel,
+    QModelIndex,
+    QObject,
+    Property,
+    QSettings,
+    QThread,
+    Qt,
+    Signal,
+    Slot,
+)
 from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtWidgets import QApplication, QFileDialog
 
 from local_router import RoutingError, calculate_route
+
+
+class TrafficSignalModel(QAbstractListModel):
+    LatitudeRole = Qt.UserRole + 1
+    LongitudeRole = Qt.UserRole + 2
+    DistanceRole = Qt.UserRole + 3
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._points: list[dict[str, float]] = []
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._points)
+
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
+        if not index.isValid() or not 0 <= index.row() < len(self._points):
+            return None
+        point = self._points[index.row()]
+        if role == self.LatitudeRole:
+            return point["latitude"]
+        if role == self.LongitudeRole:
+            return point["longitude"]
+        if role == self.DistanceRole:
+            return point["distance_from_start_m"]
+        return None
+
+    def roleNames(self) -> dict[int, bytes]:
+        return {
+            self.LatitudeRole: b"latitude",
+            self.LongitudeRole: b"longitude",
+            self.DistanceRole: b"distanceFromStartM",
+        }
+
+    def set_points(self, points: list[dict[str, float]]) -> None:
+        self.beginResetModel()
+        self._points = points
+        self.endResetModel()
 
 
 class RoutingWorker(QObject):
@@ -50,16 +97,16 @@ class RoutingWorker(QObject):
 class RouteSelector(QObject):
     selectionChanged = Signal("QVariantMap")
     routeChanged = Signal("QVariantList")
-    signalsChanged = Signal("QVariantList")
     summaryChanged = Signal("QVariantMap")
     statusChanged = Signal(str)
     roadsFileChanged = Signal()
     busyChanged = Signal()
 
-    def __init__(self) -> None:
+    def __init__(self, traffic_signal_model: TrafficSignalModel) -> None:
         super().__init__()
         self.points: list[tuple[float, float]] = []
         self.current_bbox: dict[str, float] | None = None
+        self.traffic_signal_model = traffic_signal_model
         self.settings = QSettings("GPSDrivingSimulation", "QtRouteSelector")
         self._roads_file = str(self.settings.value("roads_file", "") or "")
         self._busy = False
@@ -121,7 +168,7 @@ class RouteSelector(QObject):
 
     def _clear_route_display(self) -> None:
         self.routeChanged.emit([])
-        self.signalsChanged.emit([])
+        self.traffic_signal_model.set_points([])
         self.summaryChanged.emit({})
 
     @Slot(float, float)
@@ -225,7 +272,7 @@ class RouteSelector(QObject):
             encoding="utf-8",
         )
         self.routeChanged.emit(result.get("coordinates", []))
-        self.signalsChanged.emit(result.get("traffic_signals", []))
+        self.traffic_signal_model.set_points(result.get("traffic_signals", []))
         summary = result.get("summary", {})
         self.summaryChanged.emit(summary)
         self.statusChanged.emit(
@@ -251,8 +298,10 @@ def main() -> int:
     app.setOrganizationName("GPSDrivingSimulation")
 
     engine = QQmlApplicationEngine()
-    selector = RouteSelector()
+    traffic_signal_model = TrafficSignalModel()
+    selector = RouteSelector(traffic_signal_model)
     engine.rootContext().setContextProperty("routeSelector", selector)
+    engine.rootContext().setContextProperty("trafficSignalModel", traffic_signal_model)
     engine.load(Path(__file__).with_name("main.qml"))
     if not engine.rootObjects():
         return 1
