@@ -1,6 +1,6 @@
 # Python-Umgebung einrichten
 
-Empfohlen wird Python 3.11 (64 Bit). Die virtuelle Umgebung wird direkt im Repository unter `.venv` angelegt und ist über `.gitignore` vom Commit ausgeschlossen.
+Empfohlen wird Python 3.11 (64-bit). Die virtuelle Umgebung wird direkt im Repository unter `.venv` angelegt und ist über `.gitignore` vom Commit ausgeschlossen.
 
 ## Windows PowerShell
 
@@ -19,18 +19,7 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-## Windows Eingabeaufforderung (`cmd.exe`)
-
-```bat
-py -3.11 -m venv .venv
-.venv\Scripts\activate.bat
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
 ## Nur die Qt-Routenanwendung installieren
-
-Diese Variante installiert PySide6 sowie die für die Offline-Karte und das lokale Routing benötigten Geo- und Graphbibliotheken, aber nicht die übrigen GPX-/PBF-Hilfsprogramme des Gesamtprojekts:
 
 ```powershell
 py -3.11 -m venv .venv
@@ -38,7 +27,7 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r qt_route_selector\requirements.txt
 ```
 
-Eine bereits vorhandene `.venv` muss nach einem Git-Update nicht neu erstellt werden. Es genügt, die Requirements erneut auszuführen:
+Nach einem Git-Update muss `.venv` nicht neu erstellt werden. Die Requirements erneut zu installieren reicht aus:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r qt_route_selector\requirements.txt
@@ -58,9 +47,9 @@ Ohne Aktivierung:
 .\.venv\Scripts\python.exe qt_route_selector\main.py
 ```
 
-Die Anwendung akzeptiert vorbereitete FlatGeobuf-/GeoPackage-Daten sowie direkt eine `.osm.pbf`. Für wiederholte Berechnungen ist ein räumlich indiziertes FGB oder GeoPackage performanter.
+Die Anwendung verwendet standardmäßig die schnelle Online-OSM-Karte und schaltet im Modus **Automatisch** bei fehlender Verbindung auf die lokale Vektorkarte um. Das Routing verwendet immer die ausgewählte lokale `.osm.pbf`, `.gpkg`, `.fgb`, `.geojson` oder `.shp`.
 
-Die Kartenansicht rendert die lokalen Straßen selbst. Beim Start und bei der Bedienung werden keine Kartenkacheln aus dem Internet abgerufen; ein API-Key ist nicht erforderlich.
+Bei einer großen PBF empfiehlt sich nach der Auswahl die einmalige Schaltfläche **PBF-Schnellindex erstellen**. Sie erzeugt ein räumlich indiziertes `*_routing.gpkg`, das anschließend automatisch verwendet wird.
 
 ## Tests ausführen
 
@@ -68,4 +57,4 @@ Die Kartenansicht rendert die lokalen Straßen selbst. Beim Start und bei der Be
 .\.venv\Scripts\python.exe -m unittest discover -s qt_route_selector\tests -v
 ```
 
-Weitere Hinweise zur Bedienung, PBF-/FGB-Auswahl und zum JSON-Ausgabeformat stehen in `qt_route_selector/README.md`.
+Weitere Hinweise zu Kartenmodi, Zwischenzielen, Routingprofilen und dem Schnellindex stehen in `qt_route_selector/README.md`.
