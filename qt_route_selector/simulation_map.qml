@@ -36,11 +36,58 @@ Rectangle {
         center: QtPositioning.coordinate(48.74, 9.31)
         zoomLevel: 11
 
+        function mercatorY(latitude) {
+            const clipped = Math.max(-85.05112878, Math.min(85.05112878, latitude))
+            const radians = clipped * Math.PI / 180.0
+            return Math.log(Math.tan(Math.PI / 4.0 + radians / 2.0))
+        }
+
+        function fitRoute() {
+            const path = simulationMapBridge.routePath
+            if (path.length < 2 || width < 10 || height < 10) {
+                return
+            }
+
+            let minLatitude = 90.0
+            let maxLatitude = -90.0
+            let minLongitude = 180.0
+            let maxLongitude = -180.0
+            for (let index = 0; index < path.length; ++index) {
+                minLatitude = Math.min(minLatitude, path[index].latitude)
+                maxLatitude = Math.max(maxLatitude, path[index].latitude)
+                minLongitude = Math.min(minLongitude, path[index].longitude)
+                maxLongitude = Math.max(maxLongitude, path[index].longitude)
+            }
+
+            const centerLatitude = (minLatitude + maxLatitude) / 2.0
+            const centerLongitude = (minLongitude + maxLongitude) / 2.0
+            center = QtPositioning.coordinate(centerLatitude, centerLongitude)
+
+            const longitudeSpan = Math.max(maxLongitude - minLongitude, 0.0001)
+            const mercatorSpan = Math.max(
+                Math.abs(mercatorY(maxLatitude) - mercatorY(minLatitude)),
+                0.000001
+            )
+            const usableWidth = Math.max(200.0, width - 90.0)
+            const usableHeight = Math.max(140.0, height - 80.0)
+            const paddingFactor = 1.20
+            const zoomLongitude = Math.log(
+                usableWidth * 360.0 / (256.0 * longitudeSpan * paddingFactor)
+            ) / Math.LN2
+            const zoomLatitude = Math.log(
+                usableHeight * 2.0 * Math.PI / (256.0 * mercatorSpan * paddingFactor)
+            ) / Math.LN2
+            zoomLevel = Math.max(3.0, Math.min(18.0, Math.min(zoomLongitude, zoomLatitude)))
+        }
+
         Component.onCompleted: {
             if (supportedMapTypes.length > 0) {
                 activeMapType = supportedMapTypes[supportedMapTypes.length - 1]
             }
+            fitTimer.restart()
         }
+        onWidthChanged: fitTimer.restart()
+        onHeightChanged: fitTimer.restart()
 
         MapPolyline {
             id: routeLine
@@ -90,20 +137,15 @@ Rectangle {
         Connections {
             target: simulationMapBridge
             function onRoutePathChanged() {
-                routeLine.path = simulationMapBridge.routePath
                 fitTimer.restart()
             }
         }
 
         Timer {
             id: fitTimer
-            interval: 80
+            interval: 300
             repeat: false
-            onTriggered: {
-                if (simulationMapBridge.routePath.length > 1) {
-                    map.fitViewportToMapItems([routeLine], Qt.rect(35, 35, 35, 35))
-                }
-            }
+            onTriggered: map.fitRoute()
         }
     }
 
