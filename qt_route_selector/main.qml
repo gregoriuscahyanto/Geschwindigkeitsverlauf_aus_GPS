@@ -21,6 +21,30 @@ ApplicationWindow {
     Plugin {
         id: osmPlugin
         name: "osm"
+
+        // Do not let Qt dynamically select a third-party provider such as
+        // Thunderforest. The custom map below uses the public OSM standard
+        // tiles and therefore needs no API key.
+        PluginParameter {
+            name: "osm.mapping.providersrepository.disabled"
+            value: true
+        }
+        PluginParameter {
+            name: "osm.mapping.custom.host"
+            value: "https://tile.openstreetmap.org/"
+        }
+        PluginParameter {
+            name: "osm.mapping.custom.datacopyright"
+            value: "© OpenStreetMap contributors"
+        }
+        PluginParameter {
+            name: "osm.mapping.prefetching_style"
+            value: "NoPrefetching"
+        }
+        PluginParameter {
+            name: "osm.useragent"
+            value: "GeschwindigkeitsverlaufAusGPS/0.1 (Qt research application)"
+        }
     }
 
     ColumnLayout {
@@ -77,6 +101,26 @@ ApplicationWindow {
                 map.plugin: osmPlugin
                 map.center: QtPositioning.coordinate(48.743, 9.320)
                 map.zoomLevel: 12
+
+                // Qt exposes a custom tile host as the final supported map
+                // type. Select it explicitly so the map cannot fall back to
+                // an API-key protected third-party style.
+                function activateCustomMapType() {
+                    const mapTypes = map.supportedMapTypes
+                    if (mapTypes.length > 0) {
+                        map.activeMapType = mapTypes[mapTypes.length - 1]
+                    }
+                }
+
+                Component.onCompleted: activateCustomMapType()
+
+                Connections {
+                    target: mapView.map
+
+                    function onSupportedMapTypesChanged() {
+                        mapView.activateCustomMapType()
+                    }
+                }
 
                 MapRectangle {
                     id: regionRectangle
