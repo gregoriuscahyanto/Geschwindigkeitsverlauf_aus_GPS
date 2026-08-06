@@ -11,4 +11,6 @@ __pycache__/
 
 # Local route-selector output
 selected_region.json
+route_result.json
 qt_route_selector/selected_region.json
+qt_route_selector/route_result.json
