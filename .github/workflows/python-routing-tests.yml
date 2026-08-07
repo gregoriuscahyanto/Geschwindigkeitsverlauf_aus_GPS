@@ -76,14 +76,21 @@ jobs:
               raise SystemExit("Automatic Austria/Alps data assistant is missing")
           if window.dataset_combo.itemData(0) != "austria":
               raise SystemExit("Austria is not the default automatic dataset")
-          if not hasattr(window.speed_profile, "set_dem_path"):
-              raise SystemExit("Programmatic DEM activation is missing")
+          if window.speed_profile is not None:
+              raise SystemExit("Heavy simulation UI was created during startup")
           if not window._simulation_load_pending:
               raise SystemExit("Simulation route load is not deferred at startup")
 
+          # Explicitly open tab 2 and construct the heavy UI only now.
+          window.tabs.setCurrentIndex(1)
+          window._ensure_simulation_created()
           simulation = window.speed_profile
+          if simulation is None:
+              raise SystemExit("Lazy simulation UI was not created on demand")
+          if not hasattr(simulation, "set_dem_path"):
+              raise SystemExit("Programmatic DEM activation is missing")
           if simulation._result is not None:
-              raise SystemExit("Simulation was unexpectedly calculated during startup")
+              raise SystemExit("Simulation was unexpectedly calculated without a route")
           if simulation.axis_combo.count() != 2:
               raise SystemExit("Time/distance axis selector is missing")
           if simulation.findChildren(QTabWidget):
@@ -130,6 +137,6 @@ jobs:
               errors = "\n".join(error.toString() for error in simulation.map_widget.errors())
               raise SystemExit(f"Simulation map QML failed to load:\n{errors}")
 
-          print("Unified Qt application loaded successfully without route simulation at startup")
+          print("Unified Qt application uses lazy simulation startup successfully")
           window.close()
           PY
