@@ -65,33 +65,26 @@ jobs:
 
           app = QApplication([])
           window = CompleteApplicationWindow(force_offline=True)
-          if window.tabs.count() != 2:
-              raise SystemExit("Unified application does not contain two tabs")
+          if window.tabs.count() != 3:
+              raise SystemExit("Unified application does not contain three tabs")
           if "Route" not in window.tabs.tabText(0):
               raise SystemExit("Routing tab was not created")
           if "Geschwindigkeitsverlauf" not in window.tabs.tabText(1):
               raise SystemExit("Simulation tab was not created")
+          if "Datenabdeckung" not in window.tabs.tabText(2):
+              raise SystemExit("Data coverage tab was not created")
 
           if hasattr(window, "dataset_combo"):
               raise SystemExit("Manual dataset selector still exists; region selection must be automatic")
           if not hasattr(window, "detected_region_label"):
               raise SystemExit("Automatic detected-region indicator is missing")
-          if not hasattr(window, "dataset_inventory_label"):
-              raise SystemExit("Local GPKG status inventory is missing")
-          inventory = window.dataset_inventory_label.text()
-          for expected in (
-              "Österreich (gesamt)",
-              "Baden-Württemberg",
-              "Bayern",
-              "Hessen",
-              "Schweiz",
-              "DACH",
-          ):
-              if expected not in inventory:
-                  raise SystemExit(f"Dataset status entry is missing: {expected}")
+          if hasattr(window, "dataset_inventory_label"):
+              raise SystemExit("Dataset inventory still clutters routing tab 1")
 
           if window.speed_profile is not None:
               raise SystemExit("Heavy simulation UI was created during startup")
+          if window.coverage_tab is not None:
+              raise SystemExit("Coverage map was created during startup")
           if not window._simulation_load_pending:
               raise SystemExit("Simulation route load is not deferred at startup")
 
@@ -151,6 +144,28 @@ jobs:
               errors = "\n".join(error.toString() for error in simulation.map_widget.errors())
               raise SystemExit(f"Simulation map QML failed to load:\n{errors}")
 
-          print("Unified Qt application uses automatic region selection and lazy simulation startup")
+          # Tab 3 is also lazy. It reads only local file status and must not
+          # initiate geodata downloads merely to display the overview.
+          window.tabs.setCurrentIndex(2)
+          window._ensure_coverage_created()
+          coverage = window.coverage_tab
+          if coverage is None:
+              raise SystemExit("Lazy data coverage tab was not created on demand")
+          if coverage.map_widget.status() == QQuickWidget.Status.Error:
+              errors = "\n".join(error.toString() for error in coverage.map_widget.errors())
+              raise SystemExit(f"Coverage map QML failed to load:\n{errors}")
+          inventory = coverage.inventory_label.text()
+          for expected in (
+              "Österreich (gesamt)",
+              "Baden-Württemberg",
+              "Bayern",
+              "Hessen",
+              "Schweiz",
+              "DACH",
+          ):
+              if expected not in inventory:
+                  raise SystemExit(f"Coverage status entry is missing: {expected}")
+
+          print("Unified Qt application uses automatic regions plus lazy simulation and coverage maps")
           window.close()
           PY
