@@ -35,9 +35,7 @@ from auto_data import (  # noqa: E402
     prepare_elevation_for_route,
 )
 from auto_region import (  # noqa: E402
-    DATASET_ORDER,
     dataset_label,
-    dataset_storage_state,
     detect_dataset_for_points,
 )
 from main import RoutePointModel, RouteSelector, TrafficSignalModel  # noqa: E402
@@ -146,7 +144,9 @@ class CompleteApplicationWindow(QMainWindow):
         self._last_region_signature: tuple[tuple[float, float], ...] | None = None
         self._simulation_load_pending = True
         self._simulation_creating = False
+        self._coverage_creating = False
         self.speed_profile: Any | None = None
+        self.coverage_tab: Any | None = None
         self._pending_dem_file = ""
         self._active_dataset_key = ""
         self.data_root = Path.cwd() / "data"
@@ -190,15 +190,19 @@ class CompleteApplicationWindow(QMainWindow):
             self.simulation_placeholder,
             "2 · Geschwindigkeitsverlauf",
         )
+        self.coverage_placeholder = self._build_coverage_placeholder()
+        self.tabs.addTab(
+            self.coverage_placeholder,
+            "3 · Datenabdeckung",
+        )
         self.tabs.currentChanged.connect(self._tab_changed)
         self.setCentralWidget(self.tabs)
 
         self.route_selector.routeChanged.connect(self._route_changed)
         self.route_selector.selectionChanged.connect(self._selection_changed)
 
-        # Startup remains network-free. Existing GPKG data are merely listed and
-        # the last active complete dataset may be restored. The definitive
-        # dataset is selected only after the user has placed at least two points.
+        # Startup remains network-free. The last active complete dataset may be
+        # restored locally. The definitive region is selected after two points.
         QTimer.singleShot(0, self._restore_cached_dataset)
 
     def _build_route_page(self) -> QWidget:
@@ -218,8 +222,8 @@ class CompleteApplicationWindow(QMainWindow):
         group_layout.addLayout(first_row)
 
         self.data_status = QLabel(
-            "Kein Gebiet auswählen: Nach dem zweiten Punkt erkennt die App das Gebiet, aktiviert "
-            "ein vorhandenes GPKG oder lädt PBF und erstellt den Routingindex automatisch."
+            "Start und Ziel setzen. Die App erkennt danach selbst das passende Gebiet, aktiviert "
+            "vorhandene Routingdaten oder bereitet fehlende Daten automatisch vor."
         )
         self.data_status.setWordWrap(True)
         group_layout.addWidget(self.data_status)
@@ -229,32 +233,8 @@ class CompleteApplicationWindow(QMainWindow):
         self.data_progress.setValue(0)
         group_layout.addWidget(self.data_progress)
 
-        status_title = QLabel("Lokaler Routingstatus (OSM-PBF → GPKG):")
-        status_title.setStyleSheet("font-weight: 600;")
-        group_layout.addWidget(status_title)
-
-        self.dataset_inventory_label = QLabel()
-        self.dataset_inventory_label.setWordWrap(True)
-        self.dataset_inventory_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        group_layout.addWidget(self.dataset_inventory_label)
-
-        self.data_path_label = QLabel(f"Lokaler Datenordner: {self.data_root}")
-        self.data_path_label.setStyleSheet("color: palette(mid); font-size: 11px;")
-        group_layout.addWidget(self.data_path_label)
-
-        fallback_note = QLabel(
-            "Die Schaltfläche für eine manuelle Straßendatei in der Kartenleiste ist nur ein "
-            "Fallback für eigene Daten. Im normalen Workflow ist sie nicht erforderlich."
-        )
-        fallback_note.setWordWrap(True)
-        fallback_note.setStyleSheet("color: palette(mid); font-size: 11px;")
-        group_layout.addWidget(fallback_note)
-
         page_layout.addWidget(data_group)
         page_layout.addWidget(self.route_container, 1)
-        self._refresh_dataset_inventory()
         return page
 
     def _build_simulation_placeholder(self) -> QWidget:
@@ -273,24 +253,20 @@ class CompleteApplicationWindow(QMainWindow):
         layout.addStretch(1)
         return page
 
-    def _refresh_dataset_inventory(self) -> None:
-        if not hasattr(self, "dataset_inventory_label"):
-            return
-        lines: list[str] = []
-        for dataset_key in DATASET_ORDER:
-            state = dataset_storage_state(dataset_key, self.data_root)
-            active = "▶ " if dataset_key == self._active_dataset_key else "  "
-            status = str(state["status"])
-            if status == "gpkg_ready":
-                symbol = "✓"
-            elif status in {"pbf_only", "gpkg_stale"}:
-                symbol = "◐"
-            else:
-                symbol = "○"
-            lines.append(
-                f"{active}{symbol} {state['label']}: {state['status_text']}"
-            )
-        self.dataset_inventory_label.setText("\n".join(lines))
+    def _build_coverage_placeholder(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(24, 24, 24, 24)
+        label = QLabel(
+            "Die Datenabdeckungskarte wird erst beim Öffnen dieses Tabs geladen.\n\n"
+            "Sie zeigt lokal vorhandene .poly-Grenzen, OSM-PBF-Dateien und fertige Routing-GPKGs."
+        )
+        label.setWordWrap(True)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addStretch(1)
+        layout.addWidget(label)
+        layout.addStretch(1)
+        return page
 
     @staticmethod
     def _points_signature(points: list[Any]) -> tuple[tuple[float, float], ...]:
@@ -307,7 +283,6 @@ class CompleteApplicationWindow(QMainWindow):
 
     @Slot()
     def _restore_cached_dataset(self) -> None:
-        self._refresh_dataset_inventory()
         saved = str(
             self.route_selector.settings.value("active_dataset_key", "") or ""
         )
@@ -325,6 +300,14 @@ class CompleteApplicationWindow(QMainWindow):
             "Routinggebiet und bereitet fehlende Daten selbst vor."
         )
         self.data_progress.setValue(0)
+
+    def _refresh_coverage_if_ready(self) -> None:
+        if self.coverage_tab is None:
+            return
+        try:
+            self.coverage_tab.refresh(active_dataset_key=self._active_dataset_key)
+        except Exception:
+            pass
 
     def _activate_prepared_data(
         self,
@@ -355,7 +338,7 @@ class CompleteApplicationWindow(QMainWindow):
             if self.route_selector.pointCount >= 2:
                 self.detected_region_label.setText(dataset_label(dataset_key))
         self.data_progress.setValue(100)
-        self._refresh_dataset_inventory()
+        self._refresh_coverage_if_ready()
 
         label = dataset_label(dataset_key)
         if restored and dem_file:
@@ -470,6 +453,7 @@ class CompleteApplicationWindow(QMainWindow):
     def _region_thread_finished(self) -> None:
         self._region_thread = None
         self._region_worker = None
+        self._refresh_coverage_if_ready()
         self._maybe_process_pending_region()
 
     def _maybe_process_pending_region(self) -> None:
@@ -489,13 +473,19 @@ class CompleteApplicationWindow(QMainWindow):
 
     @Slot(int)
     def _tab_changed(self, index: int) -> None:
-        if index != 1:
+        if index == 1:
+            if self.speed_profile is None and not self._simulation_creating:
+                QTimer.singleShot(60, self._ensure_simulation_created)
+                return
+            if self.speed_profile is not None and self._simulation_load_pending:
+                QTimer.singleShot(60, self._load_pending_simulation)
             return
-        if self.speed_profile is None and not self._simulation_creating:
-            QTimer.singleShot(60, self._ensure_simulation_created)
-            return
-        if self.speed_profile is not None and self._simulation_load_pending:
-            QTimer.singleShot(60, self._load_pending_simulation)
+
+        if index == 2:
+            if self.coverage_tab is None and not self._coverage_creating:
+                QTimer.singleShot(40, self._ensure_coverage_created)
+            else:
+                self._refresh_coverage_if_ready()
 
     @Slot()
     def _ensure_simulation_created(self) -> None:
@@ -534,6 +524,40 @@ class CompleteApplicationWindow(QMainWindow):
 
         if self._simulation_load_pending:
             QTimer.singleShot(80, self._load_pending_simulation)
+
+    @Slot()
+    def _ensure_coverage_created(self) -> None:
+        if self.coverage_tab is not None or self._coverage_creating:
+            return
+        if self.tabs.currentIndex() != 2:
+            return
+
+        self._coverage_creating = True
+        try:
+            from coverage_tab import CoverageTab
+
+            coverage = CoverageTab(
+                self.data_root,
+                active_dataset_key=self._active_dataset_key,
+                parent=self,
+            )
+            self.coverage_tab = coverage
+            self.tabs.blockSignals(True)
+            try:
+                self.tabs.removeTab(2)
+                self.tabs.insertTab(2, coverage, "3 · Datenabdeckung")
+                self.tabs.setCurrentIndex(2)
+            finally:
+                self.tabs.blockSignals(False)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Datenabdeckung konnte nicht initialisiert werden",
+                str(exc),
+            )
+            self.tabs.setCurrentIndex(0)
+        finally:
+            self._coverage_creating = False
 
     @Slot()
     def _load_pending_simulation(self) -> None:
@@ -602,7 +626,6 @@ class CompleteApplicationWindow(QMainWindow):
     def _data_progress_changed(self, text: str, percent: int) -> None:
         self.data_status.setText(text)
         self.data_progress.setValue(percent)
-        self._refresh_dataset_inventory()
 
     @Slot("QVariantMap")
     def _data_preparation_finished(self, result: dict[str, Any]) -> None:
@@ -612,14 +635,14 @@ class CompleteApplicationWindow(QMainWindow):
     def _data_preparation_failed(self, message: str) -> None:
         self.data_status.setText(f"Automatische Datenvorbereitung fehlgeschlagen: {message}")
         self.data_progress.setValue(0)
-        self._refresh_dataset_inventory()
+        self._refresh_coverage_if_ready()
         QMessageBox.critical(self, "Automatische Datenvorbereitung fehlgeschlagen", message)
 
     @Slot()
     def _data_thread_finished(self) -> None:
         self._data_thread = None
         self._data_worker = None
-        self._refresh_dataset_inventory()
+        self._refresh_coverage_if_ready()
         self._maybe_process_pending_region()
 
     def _start_route_elevation(self, points: list[dict[str, Any]]) -> None:
