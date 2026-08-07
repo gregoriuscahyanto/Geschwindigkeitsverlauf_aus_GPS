@@ -30,6 +30,22 @@ class IntegratedSpeedProfileWindow(_BaseWindow):
         if self._v3_layout_ready:
             self._apply_plot_layout()
 
+    def set_dem_path(self, path: str | Path | None) -> None:
+        """Activate a DEM programmatically, e.g. after an automatic download."""
+        if path is None or not str(path).strip():
+            self.clear_dem_file()
+            return
+        dem_path = Path(path).expanduser().resolve()
+        if not dem_path.exists():
+            raise FileNotFoundError(f"Höhenmodell nicht gefunden: {dem_path}")
+        self._dem_path = dem_path
+        self._invalidate_dem_cache()
+        if self.dem_status_label is not None:
+            self.dem_status_label.setText(f"DEM automatisch aktiviert: {dem_path}")
+        if self._result is not None:
+            self._update_plots()
+        self.statusBar().showMessage(f"Höhenmodell aktiviert: {dem_path.name}")
+
     def _apply_plot_layout(self) -> None:
         # Also guard delayed/partial construction. This makes the class robust
         # when Qt or a base class requests an update during initialization.
