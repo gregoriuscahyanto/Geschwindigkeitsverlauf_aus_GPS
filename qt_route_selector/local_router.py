@@ -512,8 +512,18 @@ def _load_signals(
     path: Path,
     bbox: tuple[float, float, float, float],
     route_nodes: list[tuple[float, float]],
-    radius_m: float = 18.0,
+    route_segments: list[dict[str, Any]],
+    radius_m: float = 8.0,
+    duplicate_distance_m: float = 12.0,
 ) -> list[dict[str, float]]:
+    """Match OSM signals to the actually driven road edges.
+
+    A signal merely close to the route is not sufficient. This prevents nodes
+    on parallel roads, crossings or roads below/above a motorway from becoming
+    false stops. Signals whose nearest driven edge is an Autobahn edge are
+    discarded entirely. Multiple signal nodes at one junction are collapsed to
+    one stop.
+    """
     from pyproj import Transformer
     from shapely.geometry import LineString, Point
 
@@ -522,9 +532,33 @@ def _load_signals(
         return []
 
     transformer = Transformer.from_crs(4326, 3857, always_xy=True)
-    metric_route = LineString([transformer.transform(lon, lat) for lon, lat in route_nodes])
-    matches: list[dict[str, float]] = []
+    metric_nodes = [transformer.transform(lon, lat) for lon, lat in route_nodes]
+    metric_route = LineString(metric_nodes)
 
+    metric_segments: list[tuple[Any, str, str]] = []
+    for segment in route_segments:
+        try:
+            from_index = int(segment["from_index"])
+            to_index = int(segment["to_index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (0 <= from_index < len(metric_nodes) and 0 <= to_index < len(metric_nodes)):
+            continue
+        if from_index == to_index:
+            continue
+        line = LineString([metric_nodes[from_index], metric_nodes[to_index]])
+        metric_segments.append(
+            (
+                line,
+                _text(segment.get("highway")).lower(),
+                _text(segment.get("road_category")).lower(),
+            )
+        )
+
+    if not metric_segments:
+        return []
+
+    candidates: list[dict[str, float]] = []
     for record in signals.to_dict("records"):
         record = _enrich_record(record)
         if _is_pbf(path) and _text(record.get("highway")) != "traffic_signals":
@@ -537,16 +571,45 @@ def _load_signals(
             if point.geom_type != "Point":
                 continue
             metric_point = Point(*transformer.transform(point.x, point.y))
-            if metric_route.distance(metric_point) <= radius_m:
-                matches.append(
-                    {
-                        "latitude": float(point.y),
-                        "longitude": float(point.x),
-                        "distance_from_start_m": float(metric_route.project(metric_point)),
-                    }
-                )
 
-    matches.sort(key=lambda item: item["distance_from_start_m"])
+            nearest_distance = math.inf
+            nearest_highway = ""
+            nearest_category = ""
+            for segment_line, highway, road_category in metric_segments:
+                distance = float(segment_line.distance(metric_point))
+                if distance < nearest_distance:
+                    nearest_distance = distance
+                    nearest_highway = highway
+                    nearest_category = road_category
+
+            if nearest_distance > radius_m:
+                continue
+            if nearest_highway in {"motorway", "motorway_link"} or nearest_category == "autobahn":
+                continue
+
+            candidates.append(
+                {
+                    "latitude": float(point.y),
+                    "longitude": float(point.x),
+                    "distance_from_start_m": float(metric_route.project(metric_point)),
+                    "_lateral_distance_m": nearest_distance,
+                }
+            )
+
+    candidates.sort(key=lambda item: item["distance_from_start_m"])
+    matches: list[dict[str, float]] = []
+    for candidate in candidates:
+        if matches and (
+            candidate["distance_from_start_m"] - matches[-1]["distance_from_start_m"]
+            <= duplicate_distance_m
+        ):
+            if candidate["_lateral_distance_m"] < matches[-1]["_lateral_distance_m"]:
+                matches[-1] = candidate
+            continue
+        matches.append(candidate)
+
+    for match in matches:
+        match.pop("_lateral_distance_m", None)
     return matches
 
 
@@ -730,7 +793,7 @@ def calculate_route(
         {"latitude": float(node[1]), "longitude": float(node[0])}
         for node in route_nodes
     ]
-    signals = _load_signals(path, read_bbox, route_nodes)
+    signals = _load_signals(path, read_bbox, route_nodes, segments)
     return {
         "coordinates": coordinates,
         "segments": segments,
