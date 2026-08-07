@@ -42,11 +42,11 @@ from offline_map import OfflineMapItem  # noqa: E402
 
 
 DATASET_ORDER = (
+    "austria",
     "baden_wuerttemberg",
     "bayern",
     "hessen",
     "switzerland",
-    "austria",
     "dach",
 )
 
