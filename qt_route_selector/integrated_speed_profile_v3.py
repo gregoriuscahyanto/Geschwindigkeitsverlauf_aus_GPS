@@ -3,17 +3,30 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import numpy as np
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QApplication, QSplitter, QSizePolicy, QVBoxLayout
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QMessageBox,
+    QSplitter,
+    QSizePolicy,
+    QVBoxLayout,
+)
 
 try:
+    from .enhanced_speed_simulation import simulate_speed_profile as _enhanced_simulate
     from .integrated_speed_profile_v2 import IntegratedSpeedProfileWindow as _BaseWindow
 except ImportError:
+    from enhanced_speed_simulation import simulate_speed_profile as _enhanced_simulate
     from integrated_speed_profile_v2 import IntegratedSpeedProfileWindow as _BaseWindow
 
 
 class IntegratedSpeedProfileWindow(_BaseWindow):
-    """UI refinement with three stacked plots and the map on the right.
+    """UI refinement with focused plots and more human driver dynamics.
 
     Route loading is deliberately deferred during construction. The base live
     editor normally loads and simulates an existing route_result.json from its
@@ -38,6 +51,7 @@ class IntegratedSpeedProfileWindow(_BaseWindow):
         self._route_path = actual_route_path
         if hasattr(self, "route_path_label"):
             self.route_path_label.setText(str(actual_route_path))
+        self._install_post_curve_controls()
         self.statusBar().showMessage(
             "Bereit – Route wird beim Öffnen des Simulation-Tabs oder nach einer neuen Berechnung geladen."
         )
@@ -46,10 +60,108 @@ class IntegratedSpeedProfileWindow(_BaseWindow):
         self._apply_plot_layout()
         QTimer.singleShot(0, self._apply_plot_layout)
 
+    def _install_post_curve_controls(self) -> None:
+        driver_group = next(
+            (group for group in self.findChildren(QGroupBox) if group.title() == "Fahrer"),
+            None,
+        )
+        if driver_group is None or not isinstance(driver_group.layout(), QFormLayout):
+            return
+        form = driver_group.layout()
+
+        enabled = QCheckBox()
+        enabled.setChecked(True)
+        enabled.setToolTip(
+            "Nach einer tatsächlich geschwindigkeitsbegrenzenden Kurve kurz etwas über die "
+            "Reisegeschwindigkeit beschleunigen und anschließend wieder einregeln."
+        )
+        enabled.toggled.connect(self.schedule_recalculate)
+        self._control_widgets["use_post_curve_overshoot"] = enabled
+        form.addRow("Nach Kurve überschwingen", enabled)
+
+        amount = QDoubleSpinBox()
+        amount.setRange(0.0, 10.0)
+        amount.setSingleStep(0.5)
+        amount.setDecimals(1)
+        amount.setValue(3.0)
+        amount.setSuffix(" km/h")
+        amount.setKeyboardTracking(False)
+        amount.setToolTip(
+            "Zusätzliche gewünschte Geschwindigkeit nach der Kurve. 3 km/h bedeutet bei "
+            "30 km/h Reisegeschwindigkeit einen kurzen Zielwert um 33 km/h."
+        )
+        amount.valueChanged.connect(self.schedule_recalculate)
+        self._control_widgets["post_curve_overshoot_kmh"] = amount
+        form.addRow("Überschwingung", amount)
+
+        probability = QDoubleSpinBox()
+        probability.setRange(0.0, 100.0)
+        probability.setSingleStep(5.0)
+        probability.setDecimals(0)
+        probability.setValue(60.0)
+        probability.setSuffix(" %")
+        probability.setKeyboardTracking(False)
+        probability.setToolTip(
+            "Anteil geeigneter Kurvenausgänge, an denen dieses Fahrerverhalten auftritt. "
+            "Der Zufallsablauf bleibt über den Simulations-Seed reproduzierbar."
+        )
+        probability.valueChanged.connect(self.schedule_recalculate)
+        self._control_widgets["post_curve_overshoot_probability_pct"] = probability
+        form.addRow("Wahrscheinlichkeit", probability)
+
+        decay = QDoubleSpinBox()
+        decay.setRange(20.0, 300.0)
+        decay.setSingleStep(10.0)
+        decay.setDecimals(0)
+        decay.setValue(90.0)
+        decay.setSuffix(" m")
+        decay.setKeyboardTracking(False)
+        decay.setToolTip(
+            "Strecke, über die der zusätzliche Geschwindigkeitswunsch wieder auf die normale "
+            "Reisegeschwindigkeit abklingt."
+        )
+        decay.valueChanged.connect(self.schedule_recalculate)
+        self._control_widgets["post_curve_overshoot_distance_m"] = decay
+        form.addRow("Abklingstrecke", decay)
+
+    def recalculate(self) -> None:
+        if self._route is None:
+            return
+        try:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            self._result = _enhanced_simulate(self._route, self.parameters())
+            self._update_plots()
+        except Exception as exc:
+            self.statusBar().showMessage(f"Simulation fehlgeschlagen: {exc}")
+            QMessageBox.critical(self, "Simulation fehlgeschlagen", str(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
+
     def _update_plots(self) -> None:
         super()._update_plots()
         if self._v3_layout_ready:
             self._apply_plot_layout()
+            self._focus_speed_axis()
+
+    def _focus_speed_axis(self) -> None:
+        if self._result is None or not hasattr(self, "speed_plot"):
+            return
+        road_limit = np.asarray(
+            self._result.get("distance", {}).get("road_limit_kmh", []),
+            dtype=float,
+        )
+        finite = road_limit[np.isfinite(road_limit)]
+        if finite.size == 0:
+            return
+
+        # Deliberately ignore curve_limit_kmh here. A nearly straight section
+        # can mathematically yield several hundred km/h as a curvature limit;
+        # that value is useful as a constraint but should not determine the
+        # visual scale. Keep roughly 25 km/h headroom above the highest OSM
+        # street limit on the route instead.
+        y_max = max(40.0, float(np.max(finite)) + 25.0)
+        self.speed_plot.enableAutoRange(axis="y", enable=False)
+        self.speed_plot.setYRange(0.0, y_max, padding=0.02)
 
     def set_dem_path(self, path: str | Path | None) -> None:
         """Activate a DEM programmatically, e.g. after an automatic download."""
