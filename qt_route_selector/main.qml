@@ -19,6 +19,31 @@ ApplicationWindow {
     property var selectionBBox: null
     property bool onlineMode: routeSelector.mapMode === "online"
 
+    function validSelectionBBox(box) {
+        return box !== null
+            && box !== undefined
+            && box.north !== undefined
+            && box.south !== undefined
+            && box.east !== undefined
+            && box.west !== undefined
+    }
+
+    function selectionTopLeft() {
+        const box = root.selectionBBox
+        if (!root.validSelectionBBox(box)) {
+            return QtPositioning.coordinate()
+        }
+        return QtPositioning.coordinate(box.north, box.west)
+    }
+
+    function selectionBottomRight() {
+        const box = root.selectionBBox
+        if (!root.validSelectionBBox(box)) {
+            return QtPositioning.coordinate()
+        }
+        return QtPositioning.coordinate(box.south, box.east)
+    }
+
     function loadOfflineViewport() {
         if (routeSelector.roadsFile.length > 0 && !routeSelector.busy) {
             routeSelector.loadRoadMap(
@@ -232,22 +257,12 @@ ApplicationWindow {
 
                     MapRectangle {
                         parent: onlineMap.map
-                        visible: root.selectionBBox !== null
+                        visible: root.validSelectionBBox(root.selectionBBox)
                         color: "#224267d5"
                         border.color: "#4267d5"
                         border.width: 2
-                        topLeft: root.selectionBBox === null
-                            ? QtPositioning.coordinate()
-                            : QtPositioning.coordinate(
-                                root.selectionBBox.north,
-                                root.selectionBBox.west
-                            )
-                        bottomRight: root.selectionBBox === null
-                            ? QtPositioning.coordinate()
-                            : QtPositioning.coordinate(
-                                root.selectionBBox.south,
-                                root.selectionBBox.east
-                            )
+                        topLeft: root.selectionTopLeft()
+                        bottomRight: root.selectionBottomRight()
                     }
 
                     MapPolyline {
@@ -680,7 +695,11 @@ ApplicationWindow {
             root.mapSummary = summary
         }
         function onSelectionChanged(data) {
-            root.selectionBBox = data.bbox
+            root.selectionBBox = (
+                data !== null
+                && data !== undefined
+                && data.bbox !== undefined
+            ) ? data.bbox : null
             offlineMap.setSelection(data)
         }
         function onRouteChanged(points) {
