@@ -18,11 +18,29 @@ def _trapezoidal_integral(values: np.ndarray, coordinates: np.ndarray) -> float:
     trapz = getattr(np, "trapz", None)
     if callable(trapz):
         return float(trapz(values, coordinates))
-    # Very old/unusual NumPy fallback: explicit trapezoidal rule.
     if len(values) < 2:
         return 0.0
     dx = np.diff(coordinates)
     return float(np.sum((values[:-1] + values[1:]) * 0.5 * dx))
+
+
+def _cumulative_trapezoidal_energy_kwh(
+    power_kw: np.ndarray,
+    time_s: np.ndarray,
+) -> np.ndarray:
+    """Return cumulative energy in kWh from a kW power trace."""
+
+    power = np.asarray(power_kw, dtype=float)
+    time = np.asarray(time_s, dtype=float)
+    if power.shape != time.shape or power.size == 0:
+        return np.empty(0, dtype=float)
+    result = np.zeros_like(power, dtype=float)
+    if power.size < 2:
+        return result
+    dt = np.maximum(0.0, np.diff(time))
+    increments = 0.5 * (power[:-1] + power[1:]) * dt / 3600.0
+    result[1:] = np.cumsum(increments)
+    return result
 
 
 def road_grade(
@@ -32,12 +50,7 @@ def road_grade(
     smoothing_distance_m: float = 40.0,
     max_abs_grade: float = 0.35,
 ) -> np.ndarray:
-    """Return smoothed road grade dz/ds as a dimensionless fraction.
-
-    Missing elevations are interpolated when at least two finite samples exist.
-    The clipping only protects the power model from isolated DEM artefacts; it is
-    not intended to replace proper tunnel/bridge elevation handling.
-    """
+    """Return smoothed road grade dz/ds as a dimensionless fraction."""
 
     distance = np.asarray(distance_m, dtype=float)
     elevation = np.asarray(elevation_m, dtype=float)
@@ -87,12 +100,11 @@ def calculate_resistance_power(
     grade_fraction: np.ndarray,
     parameters: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Calculate signed wheel power from longitudinal resistance components.
+    """Calculate signed wheel power and its ideal energy balance.
 
-    Positive power means tractive power is required at the wheels. Negative
-    total power means braking/overrun power is required. Trailer inertia,
-    climbing, rolling and aerodynamic load are grouped into one explicit
-    trailer component so the base vehicle components stay easy to interpret.
+    Positive total power is tractive wheel power. Negative total power is
+    available braking/overrun power. Recuperation is intentionally ideal here:
+    no power limit, no battery capacity limit and 100 % recuperation efficiency.
     """
 
     time = np.asarray(time_s, dtype=float)
@@ -144,21 +156,29 @@ def calculate_resistance_power(
         "air": air_force,
         "trailer": trailer_force,
     }
-    power_kw = {
-        key: force * speed / 1000.0 for key, force in component_forces.items()
-    }
+    power_kw = {key: force * speed / 1000.0 for key, force in component_forces.items()}
     total_kw = sum(power_kw.values(), np.zeros_like(speed))
 
+    positive_power_kw = np.maximum(total_kw, 0.0)
+    recuperation_power_kw = np.maximum(-total_kw, 0.0)
+
+    cumulative_traction_energy_kwh = _cumulative_trapezoidal_energy_kwh(
+        positive_power_kw, time
+    )
+    cumulative_recuperation_energy_kwh = _cumulative_trapezoidal_energy_kwh(
+        recuperation_power_kw, time
+    )
+    cumulative_net_energy_kwh = (
+        cumulative_traction_energy_kwh - cumulative_recuperation_energy_kwh
+    )
+
     if len(time) >= 2:
-        traction_energy_kwh = _trapezoidal_integral(
-            np.maximum(total_kw, 0.0), time
-        ) / 3600.0
-        braking_energy_kwh = _trapezoidal_integral(
-            np.maximum(-total_kw, 0.0), time
-        ) / 3600.0
+        traction_energy_kwh = _trapezoidal_integral(positive_power_kw, time) / 3600.0
+        recuperation_energy_kwh = _trapezoidal_integral(recuperation_power_kw, time) / 3600.0
     else:
         traction_energy_kwh = 0.0
-        braking_energy_kwh = 0.0
+        recuperation_energy_kwh = 0.0
+    net_energy_kwh = traction_energy_kwh - recuperation_energy_kwh
 
     positive = total_kw[total_kw > 0.0]
     p95_kw = float(np.percentile(positive, 95.0)) if positive.size else 0.0
@@ -173,8 +193,17 @@ def calculate_resistance_power(
         "air_kw": power_kw["air"],
         "trailer_kw": power_kw["trailer"],
         "total_kw": total_kw,
+        "traction_power_kw": positive_power_kw,
+        "recuperation_power_kw": recuperation_power_kw,
         "traction_energy_kwh": traction_energy_kwh,
-        "braking_energy_kwh": braking_energy_kwh,
+        "recuperation_energy_kwh": recuperation_energy_kwh,
+        "net_energy_kwh": net_energy_kwh,
+        "cumulative_traction_energy_kwh": cumulative_traction_energy_kwh,
+        "cumulative_recuperation_energy_kwh": cumulative_recuperation_energy_kwh,
+        "cumulative_net_energy_kwh": cumulative_net_energy_kwh,
+        # Compatibility with older UI/tests: braking energy equals the ideal
+        # amount recoverable under the unlimited/100%-efficient assumption.
+        "braking_energy_kwh": recuperation_energy_kwh,
         "p95_positive_kw": p95_kw,
         "maximum_kw": float(np.max(total_kw)) if total_kw.size else 0.0,
         "minimum_kw": float(np.min(total_kw)) if total_kw.size else 0.0,
