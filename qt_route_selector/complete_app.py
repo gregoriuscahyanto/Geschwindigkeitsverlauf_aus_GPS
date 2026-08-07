@@ -66,6 +66,7 @@ class CompleteApplicationWindow(QMainWindow):
         self.setMinimumSize(1100, 720)
         self._data_thread: QThread | None = None
         self._data_worker: AutomaticDataWorker | None = None
+        self._simulation_load_pending = True
         self.data_root = Path.cwd() / "data"
 
         qmlRegisterType(OfflineMapItem, "OfflineMap", 1, 0, "OfflineMapItem")
@@ -99,6 +100,9 @@ class CompleteApplicationWindow(QMainWindow):
         self.route_container = QWidget.createWindowContainer(self.route_window, self)
         self.route_container.setMinimumSize(900, 600)
 
+        # The simulation UI is constructed without parsing/simulating an old
+        # route_result.json. That work is delayed until the simulation tab is
+        # actually opened, so the routing window can appear immediately.
         self.speed_profile = IntegratedSpeedProfileWindow(
             Path.cwd() / "route_result.json"
         )
@@ -108,6 +112,7 @@ class CompleteApplicationWindow(QMainWindow):
         self.tabs.setDocumentMode(True)
         self.tabs.addTab(self._build_route_page(), "1 · Route und Karte")
         self.tabs.addTab(self.speed_profile, "2 · Geschwindigkeitsverlauf")
+        self.tabs.currentChanged.connect(self._tab_changed)
         self.setCentralWidget(self.tabs)
 
         self.route_selector.routeChanged.connect(self._route_changed)
@@ -156,6 +161,22 @@ class CompleteApplicationWindow(QMainWindow):
         page_layout.addWidget(data_group)
         page_layout.addWidget(self.route_container, 1)
         return page
+
+    @Slot(int)
+    def _tab_changed(self, index: int) -> None:
+        if index != 1 or not self._simulation_load_pending:
+            return
+        # Let Qt paint the selected tab before parsing the route and running the
+        # simulation. This avoids an apparently frozen application at startup.
+        QTimer.singleShot(80, self._load_pending_simulation)
+
+    @Slot()
+    def _load_pending_simulation(self) -> None:
+        if not self._simulation_load_pending:
+            return
+        self._simulation_load_pending = False
+        self.speed_profile.statusBar().showMessage("Route und Simulation werden geladen …")
+        self.speed_profile.reload_route(silent=True)
 
     @Slot()
     def _start_data_preparation(self) -> None:
@@ -243,10 +264,12 @@ class CompleteApplicationWindow(QMainWindow):
     def _route_changed(self, points: list[dict[str, Any]]) -> None:
         if len(points) <= 1:
             return
-        QTimer.singleShot(
-            180,
-            lambda: self.speed_profile.reload_route(silent=True),
-        )
+        # A newly calculated route marks the simulation as stale. Do not run a
+        # potentially expensive simulation while the user is still on the map
+        # tab; load it when the simulation tab is opened.
+        self._simulation_load_pending = True
+        if self.tabs.currentIndex() == 1:
+            QTimer.singleShot(80, self._load_pending_simulation)
 
 
 def main() -> int:
