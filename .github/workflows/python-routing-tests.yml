@@ -72,10 +72,24 @@ jobs:
           if "Geschwindigkeitsverlauf" not in window.tabs.tabText(1):
               raise SystemExit("Simulation tab was not created")
 
-          if window.dataset_combo.count() < 2:
-              raise SystemExit("Automatic Austria/Alps data assistant is missing")
-          if window.dataset_combo.itemData(0) != "austria":
-              raise SystemExit("Austria is not the default automatic dataset")
+          if hasattr(window, "dataset_combo"):
+              raise SystemExit("Manual dataset selector still exists; region selection must be automatic")
+          if not hasattr(window, "detected_region_label"):
+              raise SystemExit("Automatic detected-region indicator is missing")
+          if not hasattr(window, "dataset_inventory_label"):
+              raise SystemExit("Local GPKG status inventory is missing")
+          inventory = window.dataset_inventory_label.text()
+          for expected in (
+              "Österreich (gesamt)",
+              "Baden-Württemberg",
+              "Bayern",
+              "Hessen",
+              "Schweiz",
+              "DACH",
+          ):
+              if expected not in inventory:
+                  raise SystemExit(f"Dataset status entry is missing: {expected}")
+
           if window.speed_profile is not None:
               raise SystemExit("Heavy simulation UI was created during startup")
           if not window._simulation_load_pending:
@@ -137,6 +151,6 @@ jobs:
               errors = "\n".join(error.toString() for error in simulation.map_widget.errors())
               raise SystemExit(f"Simulation map QML failed to load:\n{errors}")
 
-          print("Unified Qt application uses lazy simulation startup successfully")
+          print("Unified Qt application uses automatic region selection and lazy simulation startup")
           window.close()
           PY
