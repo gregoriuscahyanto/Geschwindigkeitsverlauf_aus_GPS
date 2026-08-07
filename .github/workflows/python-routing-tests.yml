@@ -27,6 +27,11 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libopengl0 libxkbcommon-x11-0
+
       - name: Install routing test dependencies
         run: |
           python -m pip install --upgrade pip
@@ -73,8 +78,12 @@ jobs:
               raise SystemExit("Austria is not the default automatic dataset")
           if not hasattr(window.speed_profile, "set_dem_path"):
               raise SystemExit("Programmatic DEM activation is missing")
+          if not window._simulation_load_pending:
+              raise SystemExit("Simulation route load is not deferred at startup")
 
           simulation = window.speed_profile
+          if simulation._result is not None:
+              raise SystemExit("Simulation was unexpectedly calculated during startup")
           if simulation.axis_combo.count() != 2:
               raise SystemExit("Time/distance axis selector is missing")
           if simulation.findChildren(QTabWidget):
@@ -121,6 +130,6 @@ jobs:
               errors = "\n".join(error.toString() for error in simulation.map_widget.errors())
               raise SystemExit(f"Simulation map QML failed to load:\n{errors}")
 
-          print("Unified Qt application loaded successfully")
+          print("Unified Qt application loaded successfully without route simulation at startup")
           window.close()
           PY
