@@ -9,6 +9,22 @@ import numpy as np
 GRAVITY_MPS2 = 9.80665
 
 
+def _trapezoidal_integral(values: np.ndarray, coordinates: np.ndarray) -> float:
+    """Integrate compatibly with NumPy 1.26 and NumPy 2.x."""
+
+    trapezoid = getattr(np, "trapezoid", None)
+    if callable(trapezoid):
+        return float(trapezoid(values, coordinates))
+    trapz = getattr(np, "trapz", None)
+    if callable(trapz):
+        return float(trapz(values, coordinates))
+    # Very old/unusual NumPy fallback: explicit trapezoidal rule.
+    if len(values) < 2:
+        return 0.0
+    dx = np.diff(coordinates)
+    return float(np.sum((values[:-1] + values[1:]) * 0.5 * dx))
+
+
 def road_grade(
     distance_m: np.ndarray,
     elevation_m: np.ndarray,
@@ -134,12 +150,12 @@ def calculate_resistance_power(
     total_kw = sum(power_kw.values(), np.zeros_like(speed))
 
     if len(time) >= 2:
-        traction_energy_kwh = float(
-            np.trapz(np.maximum(total_kw, 0.0), time) / 3600.0
-        )
-        braking_energy_kwh = float(
-            np.trapz(np.maximum(-total_kw, 0.0), time) / 3600.0
-        )
+        traction_energy_kwh = _trapezoidal_integral(
+            np.maximum(total_kw, 0.0), time
+        ) / 3600.0
+        braking_energy_kwh = _trapezoidal_integral(
+            np.maximum(-total_kw, 0.0), time
+        ) / 3600.0
     else:
         traction_energy_kwh = 0.0
         braking_energy_kwh = 0.0
