@@ -43,6 +43,13 @@ class ResistancePowerTests(unittest.TestCase):
             + np.asarray(result["trailer_kw"])
         )
         np.testing.assert_allclose(result["total_kw"], expected)
+        self.assertGreater(float(result["traction_energy_kwh"]), 0.0)
+        self.assertAlmostEqual(float(result["recuperation_energy_kwh"]), 0.0, places=9)
+        self.assertAlmostEqual(
+            float(result["net_energy_kwh"]),
+            float(result["traction_energy_kwh"]),
+            places=9,
+        )
 
     def test_uphill_grade_creates_positive_climbing_power(self) -> None:
         distance = np.arange(0.0, 101.0, 5.0)
@@ -81,7 +88,7 @@ class ResistancePowerTests(unittest.TestCase):
         self.assertTrue(result["trailer_enabled"])
         self.assertTrue(np.all(np.asarray(result["trailer_kw"]) > 0.0))
 
-    def test_deceleration_can_produce_negative_total_power(self) -> None:
+    def test_deceleration_can_produce_negative_total_power_and_recuperation(self) -> None:
         time = np.arange(0.0, 5.0, 1.0)
         result = calculate_resistance_power(
             time,
@@ -91,7 +98,38 @@ class ResistancePowerTests(unittest.TestCase):
             {"vehicle_mass_kg": 1800.0},
         )
         self.assertLess(float(np.min(result["total_kw"])), 0.0)
-        self.assertGreater(float(result["braking_energy_kwh"]), 0.0)
+        self.assertGreater(float(result["recuperation_energy_kwh"]), 0.0)
+        self.assertAlmostEqual(
+            float(result["braking_energy_kwh"]),
+            float(result["recuperation_energy_kwh"]),
+            places=9,
+        )
+        self.assertAlmostEqual(
+            float(result["net_energy_kwh"]),
+            float(result["traction_energy_kwh"]) - float(result["recuperation_energy_kwh"]),
+            places=9,
+        )
+
+    def test_cumulative_energy_ends_at_scalar_energy_balance(self) -> None:
+        time = np.arange(0.0, 9.0, 1.0)
+        speed = np.full_like(time, 54.0)
+        acceleration = np.asarray([0.0, 1.2, 1.0, 0.2, -0.5, -1.5, -1.0, 0.3, 0.0])
+        result = calculate_resistance_power(
+            time,
+            speed,
+            acceleration,
+            np.zeros_like(time),
+            {"vehicle_mass_kg": 1800.0},
+        )
+        drive_curve = np.asarray(result["cumulative_traction_energy_kwh"])
+        recup_curve = np.asarray(result["cumulative_recuperation_energy_kwh"])
+        net_curve = np.asarray(result["cumulative_net_energy_kwh"])
+        self.assertEqual(len(drive_curve), len(time))
+        self.assertTrue(np.all(np.diff(drive_curve) >= -1e-12))
+        self.assertTrue(np.all(np.diff(recup_curve) >= -1e-12))
+        self.assertAlmostEqual(float(drive_curve[-1]), float(result["traction_energy_kwh"]), places=9)
+        self.assertAlmostEqual(float(recup_curve[-1]), float(result["recuperation_energy_kwh"]), places=9)
+        self.assertAlmostEqual(float(net_curve[-1]), float(result["net_energy_kwh"]), places=9)
 
     def test_load_collective_is_time_weighted_and_sums_to_100_percent(self) -> None:
         time = np.asarray([0.0, 1.0, 2.0, 4.0, 7.0])
