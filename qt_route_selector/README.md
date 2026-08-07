@@ -1,119 +1,135 @@
 # Qt-Routenplaner und Live-Geschwindigkeitsverlauf
 
-Die Anwendung berechnet eine Route aus OSM-Daten und erzeugt daraus einen live einstellbaren Geschwindigkeitsverlauf. Karte, Routing und Simulation befinden sich in **einem Fenster mit zwei Tabs**.
+Die Anwendung berechnet lokale OSM-Routen und erzeugt daraus einen live einstellbaren Geschwindigkeits-, Höhen- und Fahrwiderstandsverlauf. Der normale Workflow benötigt keine manuelle Gebiets- oder Straßendateiauswahl.
 
 ## Start
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r qt_route_selector\requirements.txt
-.\.venv\Scripts\python.exe qt_route_selector\complete_app.py
+python -m pip install -r qt_route_selector\requirements.txt
+python qt_route_selector\complete_app.py
 ```
 
-## Automatische Datenvorbereitung
+## Oberfläche
 
-Im ersten Tab befindet sich oberhalb der Karte der Bereich **Daten automatisch vorbereiten**.
+Die Anwendung besitzt drei Tabs:
 
-### Österreich – A10 / Großglockner
+1. **Route und Karte** – Start/Ziel/Zwischenziele setzen und Route berechnen.
+2. **Geschwindigkeitsverlauf** – Fahrer-, Fahrzeug- und Fahrwiderstandsparameter sowie Vergleich mehrerer Konfigurationen.
+3. **Datenabdeckung** – lokale POLY-, PBF- und GPKG-Abdeckung auf einer Karte anzeigen.
 
-Mit **OSM + Höhen automatisch laden** erledigt die Anwendung beim ersten Mal selbstständig:
+Die beiden schweren Tabs 2 und 3 werden erst beim Öffnen initialisiert. Währenddessen zeigt die Anwendung einen indeterminierten Ladebalken.
 
-1. `austria-latest.osm.pbf` von Geofabrik herunterladen,
-2. MD5-Prüfsumme kontrollieren,
-3. lokalen räumlich indizierten Routing-Cache erzeugen,
-4. das österreichweite 10-m-DGM von Geoland/data.gv.at herunterladen,
-5. das GeoTIFF entpacken,
-6. Routingdatei und Höhenmodell automatisch aktivieren.
+## Automatische Gebiets- und Datenwahl
 
-Die Dateien landen standardmäßig unter:
+Nach Start und Ziel erkennt die App selbst das kleinste passende unterstützte Gebiet. Unterstützt werden unter anderem:
 
-```text
-data/
-├── osm/
-│   ├── austria-latest.osm.pbf
-│   └── austria-latest_routing.gpkg
-└── elevation/
-    ├── austria-dgm10.zip
-    └── austria-dgm10/
-```
+- Baden-Württemberg
+- Bayern
+- Hessen
+- Schweiz
+- Österreich (gesamt)
+- DACH für grenzüberschreitende Routen
 
-Ist eine Datei bereits vorhanden, wird sie wiederverwendet. Ein vorhandener aktueller Routingindex wird nicht erneut aufgebaut. Nach der einmaligen Vorbereitung funktionieren Routing und Höhenprofil lokal/offline.
+Fehlende OSM-PBFs werden bei Bedarf geladen, als lokaler Routingindex (`*.gpkg`) vorbereitet und danach wiederverwendet. Vorhandene Daten werden beim nächsten Start automatisch erkannt. Die manuelle Straßendateiauswahl bleibt nur als Experten-Fallback bestehen.
 
-### Alpen – grenzüberschreitend
+## Höhenmodelle
 
-Für längere grenzüberschreitende Alpenrouten kann stattdessen der Geofabrik-Extrakt `alps-latest.osm.pbf` verwendet werden. Dieser ist deutlich größer als der Österreich-Extrakt. Das automatisch vorbereitete DGM deckt dabei Österreich ab; für Strecken außerhalb Österreichs ist eine weitere Höhenquelle erforderlich.
+Höhen werden automatisch aus den für die Route vorbereiteten DEM-Daten gelesen. In Tab 2 gibt es deshalb keine manuelle DEM-Auswahl mehr. Der aktuelle DEM-Status bleibt sichtbar.
 
-## Tab 1: Route und Karte
+Die sichtbare Höhenkurve wird standardmäßig distanzbasiert geglättet. Das Glättungsfenster kann in Metern eingestellt oder mit `0 m` vollständig deaktiviert werden.
 
-- Online-OSM als Standardkarte
-- automatischer Offline-Fallback
-- lokale `.osm.pbf`, `.gpkg`, `.fgb`, `.geojson` oder `.shp` als Routingquelle
-- Start, beliebig viele Zwischenziele und Ziel per Klick
-- Routingprofile für Hauptstraßen, schnellste oder kürzeste Route
-- PBF-Schnellindex für wiederholte, schnelle lokale Abfragen
+Wichtig: Gelände-DGMs beschreiben nicht automatisch die reale Fahrbahnhöhe in langen Tunneln oder auf Brücken. Für eine physikalisch genaue Steigungsleistung müssen solche Abschnitte separat korrigiert werden.
 
-Nach **Route berechnen** wird `route_result.json` geschrieben und automatisch an den zweiten Tab übergeben.
+## Geschwindigkeits- und Fahrermodell
 
-## Tab 2: Geschwindigkeitsverlauf
+Berücksichtigt werden unter anderem:
 
-Die Simulation wird nach einer Parameteränderung mit kurzer Verzögerung neu berechnet. Einstellbar sind unter anderem:
-
-- Fahrer-Preset und Temperament
-- Reisegeschwindigkeit, Fahrerobergrenze und Bias
-- Beschleunigung, Verzögerung, Ruck und Reglerverstärkung
-- Kurvenverhalten und maximale Querbeschleunigung
+- Fahrer-Presets und Temperament
+- Reisegeschwindigkeit, Bias und absolute Obergrenze
+- Beschleunigung, Verzögerung und Ruck
+- Kurvenradius und maximale Querbeschleunigung
+- Nach-Kurven-Überschwingen
 - Straßenbelag
-- reale OSM-Ampelstopps und Rotphasen
+- ausschließlich reale OSM-Ampelstopps
 - Überholvorgänge
-- Fahrerrauschen
+- korreliertes Fahrerrauschen
 - Fahrzeug- und Anhängermasse
 
-Die drei synchronisierten Plots liegen links untereinander:
+Die Geschwindigkeits-Y-Achse orientiert sich am realen Straßenlimit plus Reserve und nicht an mathematisch sehr hohen Kurvenlimit-Spitzen.
+
+## Vier synchronisierte Zeit-/Streckenplots
+
+Links liegen vier synchronisierte Plots:
 
 1. Geschwindigkeit
 2. Längsbeschleunigung
-3. Höhenprofil
+3. geglättetes Höhenprofil
+4. Fahrwiderstandsleistung am Rad
 
-Rechts befindet sich die geografische Kartenansicht. Die gemeinsame X-Achse kann zwischen Zeit und Strecke umgeschaltet werden. Hovering bewegt den gemeinsamen Cursor und gleichzeitig den Fahrzeugmarker auf der Karte.
+Die gemeinsame X-Achse kann zwischen Zeit und Strecke umgeschaltet werden. Hover-Cursor und Fahrzeugmarker auf der Karte bleiben synchron. Mit **Ansicht zurücksetzen** werden Zoom und Verschiebung aller Plots zurückgesetzt.
 
-## Höhenprofil
+Die Legenden liegen fest außerhalb der Datenfläche, sind nicht verschiebbar und können dadurch keine Kurven verdecken oder Einträge abschneiden.
 
-Höhen können aus einem in der Route enthaltenen Höhenfeld oder aus einem lokalen GeoTIFF-DGM gelesen werden. Der automatische Österreich-Workflow aktiviert das österreichweite 10-m-DGM selbstständig. Alternativ kann weiterhin manuell ein DEM/GeoTIFF ausgewählt werden.
+## Fahrwiderstandsleistung
 
-Wichtig für Gebirgsstraßen: Ein DGM beschreibt die Geländeoberfläche. Bei Tunneln liegt die reale Straße unter dem Gelände und bei Brücken über dem Gelände. Tunnel- und Brückenabschnitte müssen deshalb für ein fahrdynamisch korrektes Straßenhöhenprofil separat behandelt bzw. interpoliert werden.
-
-## Ampelregel
-
-Ampelstopps werden **ausschließlich** an OSM-Ampeln erzeugt, die auf der Route gefunden wurden. Sind vier OSM-Ampeln vorhanden, liegt der Einstellbereich bei `0 … 4`; synthetische fünfte Ampeln werden nicht erzeugt.
-
-## Geschwindigkeitsmodell
+Die Radleistung wird in folgende Beiträge zerlegt:
 
 ```text
-OSM-Straßenlimit
-    ↓
-Fahrer-Reisegeschwindigkeit und absolute Obergrenze
-    ↓
-Straßenbelag
-    ↓
-Kurvenlimit aus Radius und Querbeschleunigung
-    ↓
-reale OSM-Ampelstopps und Überholvorgänge
-    ↓
-Fahrerrauschen
-    ↓
-Beschleunigungs-, Brems- und Ruckbegrenzung
+P_gesamt =
+    P_Beschleunigung
+  + P_Steigung
+  + P_Roll
+  + P_Luft
+  + P_Anhänger
 ```
+
+Positiv bedeutet benötigte Antriebsleistung am Rad, negativ Brems-/Schubbetrieb. Einstellbar sind unter anderem Fahrzeug- und Anhängermasse, Rollwiderstand, `cW`, Stirnfläche, Luftdichte und Anhänger-`cW·A`.
+
+## Kumuliertes Lastkollektiv / Lastdauerlinie
+
+Rechts unterhalb der geografischen Karte wird die gesamte Fahrt als kumulierte Lastdauerlinie dargestellt:
+
+- **x-Achse:** kumulierter Zeitanteil in %
+- **y-Achse:** Radleistung in kW oder normierte Last
+- Darstellung als Linie statt Histogramm
+
+Optional können nur positive Antriebsleistungen ausgewertet und die Zeitanteilsachse logarithmisch dargestellt werden. Das entspricht der üblichen Lastkollektiv-/Dauerlinienbetrachtung aus Schwingungs- und Betriebsfestigkeitsauswertungen.
+
+## Mehrere Konfigurationen vergleichen
+
+Im Bereich **Konfigurationen vergleichen** kann die aktuelle Parametrierung als Snapshot gespeichert werden. Danach können Parameter verändert und weitere Snapshots gespeichert werden.
+
+- Bei **einer** Konfiguration zeigt die Geschwindigkeitsdarstellung weiterhin Straßenlimit, Kurvenlimit, Soll- und Istgeschwindigkeit sowie alle einzelnen Fahrwiderstandsanteile.
+- Ab **zwei** Konfigurationen wechselt die Oberfläche automatisch in den Vergleichsmodus. Geschwindigkeit, Längsbeschleunigung, gesamte Fahrwiderstandsleistung und Lastdauerlinie zeigen dann genau eine Linie pro Konfiguration.
+- Das Höhenprofil wird nur einmal dargestellt, weil die Route für alle verglichenen Fahrer-/Fahrzeugkonfigurationen identisch ist.
+
+Gespeicherte Vergleichskonfigurationen können wieder in die Eingabefelder geladen oder einzeln/komplett gelöscht werden.
+
+## Technische Mini-Plots
+
+Die Parametergruppen besitzen kompakte, live aktualisierte Vorschauplots:
+
+- **Fahrer:** Sollwert und Fahrerreaktion
+- **Kurven:** Radius → Kurvengeschwindigkeit
+- **Ampeln:** Bremsen – Halt – Anfahren
+- **Überholen:** Geschwindigkeitsverlauf eines Überholmanövers
+- **Rauschen:** zeitlich korrelierte Geschwindigkeitsabweichung
+- **Fahrzeug:** Roll-/Luft-/Gesamtleistungsbedarf über Geschwindigkeit
+
+Damit wird die Wirkung wichtiger Einstellungen direkt visuell erklärt, ohne lange Hilfetexte lesen zu müssen.
+
+## Datenabdeckung
+
+Tab 3 zeigt nur lokal vorhandene Daten und startet selbst keine großen Downloads. Die unterstützten Gebiete werden nach lokalem Status markiert, z. B. nur POLY-Grenze, OSM-PBF vorhanden oder fertiges Routing-GPKG.
 
 ## Export
 
-Über **CSV + JSON exportieren** entstehen beispielsweise:
-
-```text
-speed_profile_result.csv
-speed_profile_result.json
-```
+Über **CSV + JSON exportieren** können die Simulationsergebnisse gespeichert werden.
 
 ## Tests
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s qt_route_selector\tests -v
+python -m unittest discover -s qt_route_selector\tests -v
 ```
+
+GitHub Actions prüft zusätzlich die lazy geladenen Tabs, die vier synchronisierten Plots, Fahrwiderstand, kumulierte Lastdauerlinie, Vergleichssnapshots, technische Mini-Plots, automatische DEM-Verwendung und die Datenabdeckung.
