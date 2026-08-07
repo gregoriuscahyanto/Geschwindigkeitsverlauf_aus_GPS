@@ -1,6 +1,6 @@
 # Qt-Routenplaner und Live-Geschwindigkeitsverlauf
 
-Die Anwendung berechnet eine Route aus lokalen OSM-Daten und erzeugt daraus einen einstellbaren Geschwindigkeitsverlauf. Karte, Routing und Simulation befinden sich in **einem Fenster mit zwei Tabs**.
+Die Anwendung berechnet eine Route aus OSM-Daten und erzeugt daraus einen live einstellbaren Geschwindigkeitsverlauf. Karte, Routing und Simulation befinden sich in **einem Fenster mit zwei Tabs**.
 
 ## Start
 
@@ -8,6 +8,39 @@ Die Anwendung berechnet eine Route aus lokalen OSM-Daten und erzeugt daraus eine
 .\.venv\Scripts\python.exe -m pip install -r qt_route_selector\requirements.txt
 .\.venv\Scripts\python.exe qt_route_selector\complete_app.py
 ```
+
+## Automatische Datenvorbereitung
+
+Im ersten Tab befindet sich oberhalb der Karte der Bereich **Daten automatisch vorbereiten**.
+
+### Österreich – A10 / Großglockner
+
+Mit **OSM + Höhen automatisch laden** erledigt die Anwendung beim ersten Mal selbstständig:
+
+1. `austria-latest.osm.pbf` von Geofabrik herunterladen,
+2. MD5-Prüfsumme kontrollieren,
+3. lokalen räumlich indizierten Routing-Cache erzeugen,
+4. das österreichweite 10-m-DGM von Geoland/data.gv.at herunterladen,
+5. das GeoTIFF entpacken,
+6. Routingdatei und Höhenmodell automatisch aktivieren.
+
+Die Dateien landen standardmäßig unter:
+
+```text
+data/
+├── osm/
+│   ├── austria-latest.osm.pbf
+│   └── austria-latest_routing.gpkg
+└── elevation/
+    ├── austria-dgm10.zip
+    └── austria-dgm10/
+```
+
+Ist eine Datei bereits vorhanden, wird sie wiederverwendet. Ein vorhandener aktueller Routingindex wird nicht erneut aufgebaut. Nach der einmaligen Vorbereitung funktionieren Routing und Höhenprofil lokal/offline.
+
+### Alpen – grenzüberschreitend
+
+Für längere grenzüberschreitende Alpenrouten kann stattdessen der Geofabrik-Extrakt `alps-latest.osm.pbf` verwendet werden. Dieser ist deutlich größer als der Österreich-Extrakt. Das automatisch vorbereitete DGM deckt dabei Österreich ab; für Strecken außerhalb Österreichs ist eine weitere Höhenquelle erforderlich.
 
 ## Tab 1: Route und Karte
 
@@ -29,33 +62,30 @@ Die Simulation wird nach einer Parameteränderung mit kurzer Verzögerung neu be
 - Beschleunigung, Verzögerung, Ruck und Reglerverstärkung
 - Kurvenverhalten und maximale Querbeschleunigung
 - Straßenbelag
-- Ampelstopps und Rotphasen
+- reale OSM-Ampelstopps und Rotphasen
 - Überholvorgänge
 - Fahrerrauschen
 - Fahrzeug- und Anhängermasse
 
-### Synchronisierter Hover-Cursor
+Die drei synchronisierten Plots liegen links untereinander:
 
-Beim Bewegen der Maus über das Zeitdiagramm werden gleichzeitig angezeigt:
+1. Geschwindigkeit
+2. Längsbeschleunigung
+3. Höhenprofil
 
-- eine vertikale Linie im Geschwindigkeits-Zeitdiagramm
-- eine vertikale Linie im Beschleunigungsdiagramm
-- die zugehörige Strecke im Streckendiagramm
-- aktuelle Zeit, Geschwindigkeit, Sollgeschwindigkeit und Beschleunigung
-- aktuelle GPS-Koordinate
-- ein beweglicher Marker in der GPS-Routenansicht
+Rechts befindet sich die geografische Kartenansicht. Die gemeinsame X-Achse kann zwischen Zeit und Strecke umgeschaltet werden. Hovering bewegt den gemeinsamen Cursor und gleichzeitig den Fahrzeugmarker auf der Karte.
 
-Die GPS-Ansicht verwendet die Koordinaten aus der berechneten Route und funktioniert vollständig lokal.
+## Höhenprofil
+
+Höhen können aus einem in der Route enthaltenen Höhenfeld oder aus einem lokalen GeoTIFF-DGM gelesen werden. Der automatische Österreich-Workflow aktiviert das österreichweite 10-m-DGM selbstständig. Alternativ kann weiterhin manuell ein DEM/GeoTIFF ausgewählt werden.
+
+Wichtig für Gebirgsstraßen: Ein DGM beschreibt die Geländeoberfläche. Bei Tunneln liegt die reale Straße unter dem Gelände und bei Brücken über dem Gelände. Tunnel- und Brückenabschnitte müssen deshalb für ein fahrdynamisch korrektes Straßenhöhenprofil separat behandelt bzw. interpoliert werden.
 
 ## Ampelregel
 
-Ampelstopps werden **ausschließlich** an OSM-Ampeln erzeugt, die auf der Route gefunden wurden.
-
-Beispiel: Sind auf der Route vier OSM-Ampeln vorhanden, liegt der Einstellbereich bei `0 … 4`. Ein fünfter Ampelstopp kann nicht eingestellt oder synthetisch ergänzt werden. Bei weniger ausgewählten Stopps wird eine Teilmenge der realen OSM-Positionen verwendet.
+Ampelstopps werden **ausschließlich** an OSM-Ampeln erzeugt, die auf der Route gefunden wurden. Sind vier OSM-Ampeln vorhanden, liegt der Einstellbereich bei `0 … 4`; synthetische fünfte Ampeln werden nicht erzeugt.
 
 ## Geschwindigkeitsmodell
-
-Der Basisverlauf entsteht aus dem OSM-Attribut `maxspeed`. Darauf werden weitere Grenzen und Ereignisse angewendet:
 
 ```text
 OSM-Straßenlimit
@@ -73,13 +103,6 @@ Fahrerrauschen
 Beschleunigungs-, Brems- und Ruckbegrenzung
 ```
 
-Gezeigt werden:
-
-- Geschwindigkeit über Strecke
-- GPS-Routenansicht mit aktuellem Positionsmarker
-- Geschwindigkeit über Zeit
-- Längsbeschleunigung über Zeit
-
 ## Export
 
 Über **CSV + JSON exportieren** entstehen beispielsweise:
@@ -89,20 +112,8 @@ speed_profile_result.csv
 speed_profile_result.json
 ```
 
-Die CSV enthält Zeit, Strecke, Geschwindigkeit, Sollgeschwindigkeit und Beschleunigung. Die JSON-Datei enthält zusätzlich Parameter, räumliche Profile und Ereignisse.
-
-## PBF-Schnellindex
-
-Direktes Lesen einer großen PBF ist langsam, weil sie für räumliche Ausschnitte sequenziell durchsucht werden muss. Nach Auswahl einer PBF kann deshalb einmalig **PBF-Schnellindex erstellen** ausgeführt werden. Die Anwendung erzeugt ein räumlich indiziertes `*_routing.gpkg` und verwendet es anschließend automatisch.
-
 ## Tests
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s qt_route_selector\tests -v
 ```
-
-Die Tests prüfen unter anderem Routing, Fahrerprofile, Kurven, OSM-Ampelobergrenze, Überholen, Rauschen und Kartenprojektion.
-
-## Aktuelle Grenze
-
-Die Route enthält derzeit kein digitales Höhenprofil. Masse, Rollwiderstand, Antriebs- und Bremskraft werden bereits berücksichtigt; Steigung und Gefälle benötigen später ein lokales DEM/Höhenmodell.
