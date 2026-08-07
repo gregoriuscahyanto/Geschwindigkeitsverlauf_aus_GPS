@@ -4,18 +4,56 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QWindow
 from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
-from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+from auto_data import DATASETS, prepare_dataset  # noqa: E402
 from integrated_speed_profile_v3 import IntegratedSpeedProfileWindow  # noqa: E402
 from main import RoutePointModel, RouteSelector, TrafficSignalModel  # noqa: E402
 from offline_map import OfflineMapItem  # noqa: E402
+
+
+class AutomaticDataWorker(QObject):
+    progress = Signal(str, int)
+    finished = Signal("QVariantMap")
+    failed = Signal(str)
+
+    def __init__(self, dataset_key: str, data_root: Path) -> None:
+        super().__init__()
+        self.dataset_key = dataset_key
+        self.data_root = data_root
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = prepare_dataset(
+                self.dataset_key,
+                self.data_root,
+                progress=lambda text, percent: self.progress.emit(text, percent),
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        else:
+            self.finished.emit(result)
 
 
 class CompleteApplicationWindow(QMainWindow):
@@ -26,6 +64,9 @@ class CompleteApplicationWindow(QMainWindow):
         self.setWindowTitle("GPS-Routenplaner und Geschwindigkeitsverlauf")
         self.resize(1600, 980)
         self.setMinimumSize(1100, 720)
+        self._data_thread: QThread | None = None
+        self._data_worker: AutomaticDataWorker | None = None
+        self.data_root = Path.cwd() / "data"
 
         qmlRegisterType(OfflineMapItem, "OfflineMap", 1, 0, "OfflineMapItem")
 
@@ -65,11 +106,139 @@ class CompleteApplicationWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
-        self.tabs.addTab(self.route_container, "1 · Route und Karte")
+        self.tabs.addTab(self._build_route_page(), "1 · Route und Karte")
         self.tabs.addTab(self.speed_profile, "2 · Geschwindigkeitsverlauf")
         self.setCentralWidget(self.tabs)
 
         self.route_selector.routeChanged.connect(self._route_changed)
+
+    def _build_route_page(self) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(6, 6, 6, 6)
+        page_layout.setSpacing(6)
+
+        data_group = QGroupBox("Daten automatisch vorbereiten")
+        group_layout = QVBoxLayout(data_group)
+        first_row = QHBoxLayout()
+
+        first_row.addWidget(QLabel("Gebiet:"))
+        self.dataset_combo = QComboBox()
+        self.dataset_combo.addItem("Österreich – A10 / Großglockner", "austria")
+        self.dataset_combo.addItem("Alpen – grenzüberschreitendes OSM", "alps")
+        self.dataset_combo.setToolTip(
+            "Österreich lädt ca. 0,8 GB OSM. Das Alpen-PBF ist deutlich größer. "
+            "Das österreichische 10-m-DGM wird in beiden Fällen als Höhenquelle vorbereitet."
+        )
+        first_row.addWidget(self.dataset_combo, 1)
+
+        self.prepare_data_button = QPushButton("OSM + Höhen automatisch laden")
+        self.prepare_data_button.clicked.connect(self._start_data_preparation)
+        first_row.addWidget(self.prepare_data_button)
+        group_layout.addLayout(first_row)
+
+        second_row = QHBoxLayout()
+        self.data_progress = QProgressBar()
+        self.data_progress.setRange(0, 100)
+        self.data_progress.setValue(0)
+        second_row.addWidget(self.data_progress, 1)
+        self.data_status = QLabel(
+            "Einmalig Internet erforderlich; danach werden OSM, Routingindex und DGM lokal wiederverwendet."
+        )
+        self.data_status.setWordWrap(True)
+        second_row.addWidget(self.data_status, 2)
+        group_layout.addLayout(second_row)
+
+        self.data_path_label = QLabel(f"Lokaler Datenordner: {self.data_root}")
+        self.data_path_label.setStyleSheet("color: palette(mid); font-size: 11px;")
+        group_layout.addWidget(self.data_path_label)
+
+        page_layout.addWidget(data_group)
+        page_layout.addWidget(self.route_container, 1)
+        return page
+
+    @Slot()
+    def _start_data_preparation(self) -> None:
+        if self._data_thread is not None:
+            return
+        dataset_key = str(self.dataset_combo.currentData())
+        if dataset_key not in DATASETS:
+            return
+
+        if dataset_key == "alps":
+            answer = QMessageBox.question(
+                self,
+                "Großer OSM-Datensatz",
+                "Der Geofabrik-Alpen-Extrakt ist über 2 GB groß. Für Tauernautobahn und "
+                "Großglockner reicht der wesentlich kleinere Österreich-Datensatz.\n\n"
+                "Alpen-Datensatz trotzdem herunterladen?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        self.prepare_data_button.setEnabled(False)
+        self.dataset_combo.setEnabled(False)
+        self.data_progress.setValue(0)
+        self.data_status.setText("Datenvorbereitung wird gestartet …")
+
+        thread = QThread(self)
+        worker = AutomaticDataWorker(dataset_key, self.data_root)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._data_progress_changed)
+        worker.finished.connect(self._data_preparation_finished)
+        worker.failed.connect(self._data_preparation_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._data_thread_finished)
+        self._data_thread = thread
+        self._data_worker = worker
+        thread.start()
+
+    @Slot(str, int)
+    def _data_progress_changed(self, text: str, percent: int) -> None:
+        self.data_status.setText(text)
+        self.data_progress.setValue(percent)
+
+    @Slot("QVariantMap")
+    def _data_preparation_finished(self, result: dict[str, Any]) -> None:
+        roads_file = str(result.get("roads_file", ""))
+        dem_file = str(result.get("dem_file", ""))
+        if roads_file:
+            self.route_selector._set_roads_file(roads_file)
+        if dem_file:
+            try:
+                self.speed_profile.set_dem_path(dem_file)
+            except Exception as exc:
+                self.data_status.setText(
+                    f"Routingdaten bereit; Höhenmodell konnte nicht aktiviert werden: {exc}"
+                )
+            else:
+                self.data_status.setText(
+                    "Fertig: lokaler Routingindex und österreichisches 10-m-Höhenmodell sind aktiv."
+                )
+        else:
+            self.data_status.setText("Fertig: lokale Routingdaten sind aktiv.")
+        self.data_progress.setValue(100)
+        self.route_selector.statusChanged.emit(
+            "Automatisch vorbereitete Straßendaten sind aktiv – Start und Ziel auswählen."
+        )
+
+    @Slot(str)
+    def _data_preparation_failed(self, message: str) -> None:
+        self.data_status.setText(f"Fehler: {message}")
+        QMessageBox.critical(self, "Automatische Datenvorbereitung fehlgeschlagen", message)
+
+    @Slot()
+    def _data_thread_finished(self) -> None:
+        self._data_thread = None
+        self._data_worker = None
+        self.prepare_data_button.setEnabled(True)
+        self.dataset_combo.setEnabled(True)
 
     def _route_changed(self, points: list[dict[str, Any]]) -> None:
         if len(points) <= 1:
