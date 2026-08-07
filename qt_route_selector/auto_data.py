@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import shutil
 import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Callable
 
-from routing_cache import build_routing_cache
+from routing_cache import build_routing_cache, default_cache_path
 
 
 ProgressCallback = Callable[[str, int], None]
@@ -134,8 +133,9 @@ def _extract_dem(
     output_directory.mkdir(parents=True, exist_ok=True)
     existing = sorted(output_directory.rglob("*.tif")) + sorted(output_directory.rglob("*.tiff"))
     if existing:
-        _emit(progress, f"Höhenmodell bereits vorhanden: {existing[0].name}", 100)
-        return existing[0]
+        selected = max(existing, key=lambda path: path.stat().st_size)
+        _emit(progress, f"Höhenmodell bereits vorhanden: {selected.name}", 100)
+        return selected
 
     _emit(progress, "Entpacke österreichisches 10-m-Höhenmodell …", 97)
     with zipfile.ZipFile(archive_path) as archive:
@@ -175,13 +175,22 @@ def prepare_dataset(
     )
     _verify_geofabrik_md5(pbf_path, dataset["osm_md5_url"], progress)
 
-    _emit(progress, "Erzeuge lokalen Routing-Schnellindex …", 60)
-    cache_path = build_routing_cache(
-        str(pbf_path),
-        progress=lambda message: _emit(progress, message, 68),
+    cache_path = default_cache_path(pbf_path)
+    cache_current = (
+        cache_path.exists()
+        and cache_path.stat().st_size > 0
+        and cache_path.stat().st_mtime_ns >= pbf_path.stat().st_mtime_ns
     )
-    cache_path = Path(cache_path).resolve()
-    _emit(progress, f"Routingindex bereit: {cache_path.name}", 78)
+    if cache_current:
+        _emit(progress, f"Routingindex bereits vorhanden: {cache_path.name}", 78)
+    else:
+        _emit(progress, "Erzeuge lokalen Routing-Schnellindex …", 60)
+        cache_path = build_routing_cache(
+            str(pbf_path),
+            progress=lambda message: _emit(progress, message, 68),
+        )
+        cache_path = Path(cache_path).resolve()
+        _emit(progress, f"Routingindex bereit: {cache_path.name}", 78)
 
     dem_archive = _download(
         AUSTRIA_DEM_URL,
