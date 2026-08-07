@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
+
+# Qt Quick / QtLocation can stall on some Windows enterprise GPU drivers or
+# remote-desktop setups. Select the software scene-graph backend before any
+# PySide6 module is imported. Users can still override it explicitly by setting
+# QT_QUICK_BACKEND in their environment before launching the app.
+if sys.platform.startswith("win"):
+    os.environ.setdefault("QT_QUICK_BACKEND", "software")
 
 from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QWindow
@@ -83,10 +91,6 @@ class CompleteApplicationWindow(QMainWindow):
         if force_offline:
             self.route_selector.setMapPreference("offline")
 
-        # Only the routing QML is created at startup. Heavy simulation modules
-        # (pyqtgraph, rasterio and its second QtLocation map) are imported and
-        # constructed only when tab 2 is opened for the first time. This avoids
-        # scene-graph / GDAL startup stalls on Windows enterprise machines.
         self.qml_engine = QQmlApplicationEngine()
         self.qml_engine.rootContext().setContextProperty(
             "routeSelector", self.route_selector
@@ -186,8 +190,6 @@ class CompleteApplicationWindow(QMainWindow):
         if index != 1:
             return
         if self.speed_profile is None and not self._simulation_creating:
-            # Let the placeholder paint before importing/constructing the heavy
-            # simulation UI. The first route calculation remains unaffected.
             QTimer.singleShot(60, self._ensure_simulation_created)
             return
         if self.speed_profile is not None and self._simulation_load_pending:
