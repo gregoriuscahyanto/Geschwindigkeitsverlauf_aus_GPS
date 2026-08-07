@@ -16,15 +16,32 @@ class IntegratedSpeedProfileWindow(_BaseWindow):
     """UI refinement with three stacked plots and the map on the right."""
 
     def __init__(self, route_path: str | Path | None = None) -> None:
+        # Base constructors call self._update_plots() before the integrated
+        # widgets (speed_plot, map_widget, ...) have been created. Keep the v3
+        # layout hook disabled until the complete base UI exists.
+        self._v3_layout_ready = False
         super().__init__(route_path)
+        self._v3_layout_ready = True
         self._apply_plot_layout()
         QTimer.singleShot(0, self._apply_plot_layout)
 
     def _update_plots(self) -> None:
         super()._update_plots()
-        self._apply_plot_layout()
+        if self._v3_layout_ready:
+            self._apply_plot_layout()
 
     def _apply_plot_layout(self) -> None:
+        # Also guard delayed/partial construction. This makes the class robust
+        # when Qt or a base class requests an update during initialization.
+        required = (
+            "speed_plot",
+            "longitudinal_plot",
+            "elevation_plot",
+            "map_widget",
+        )
+        if not all(hasattr(self, name) for name in required):
+            return
+
         plots = (
             (self.speed_plot, 185),
             (self.longitudinal_plot, 155),
