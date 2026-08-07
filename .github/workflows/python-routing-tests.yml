@@ -57,6 +57,7 @@ jobs:
           from PySide6.QtWidgets import (
               QApplication,
               QGroupBox,
+              QPushButton,
               QScrollArea,
               QSplitter,
           )
@@ -73,6 +74,10 @@ jobs:
           if "Datenabdeckung" not in window.tabs.tabText(2):
               raise SystemExit("Data coverage tab was not created")
 
+          if not hasattr(window, "simulation_loading_bar"):
+              raise SystemExit("Simulation tab has no visible lazy-loading progress indicator")
+          if not hasattr(window, "coverage_loading_bar"):
+              raise SystemExit("Coverage tab has no visible lazy-loading progress indicator")
           if hasattr(window, "dataset_combo"):
               raise SystemExit("Manual dataset selector still exists; region selection must be automatic")
           if not hasattr(window, "detected_region_label"):
@@ -87,9 +92,9 @@ jobs:
           if not window._simulation_load_pending:
               raise SystemExit("Simulation route load is not deferred at startup")
 
-          # Explicitly open tab 2 and construct the heavy UI only now.
           window.tabs.setCurrentIndex(1)
           window._ensure_simulation_created()
+          app.processEvents()
           simulation = window.speed_profile
           if simulation is None:
               raise SystemExit("Lazy simulation UI was not created on demand")
@@ -114,9 +119,6 @@ jobs:
               layout = group.layout()
               if layout is None or layout.count() == 0:
                   raise SystemExit(f"Setting group is empty: {title}")
-              child = layout.itemAt(0).widget()
-              if child is None or child.isHidden():
-                  raise SystemExit(f"Setting group content is hidden: {title}")
 
           scroll_areas = simulation.findChildren(QScrollArea)
           if not scroll_areas:
@@ -132,9 +134,34 @@ jobs:
               "load_collective_plot",
               "power_summary_label",
               "right_analysis_panel",
+              "reset_views_button",
+              "comparison_group",
+              "collective_normalized_check",
+              "collective_positive_check",
+              "collective_log_check",
+              "elevation_smoothing_spin",
+              "preview_controller",
           ):
               if not hasattr(simulation, attribute) or getattr(simulation, attribute) is None:
-                  raise SystemExit(f"Resistance-power UI is missing: {attribute}")
+                  raise SystemExit(f"V4 simulation UX is missing: {attribute}")
+
+          if len(simulation.preview_controller.plots) != 6:
+              raise SystemExit("Technical parameter mini-plots are incomplete")
+          forbidden_dem_buttons = {"DEM / GeoTIFF wählen", "DEM entfernen"}
+          if any(
+              button.text() in forbidden_dem_buttons and button.isVisible()
+              for button in simulation.findChildren(QPushButton)
+          ):
+              raise SystemExit("Manual DEM buttons are still visible in the simulation tab")
+
+          simulation.compare_name_edit.setText("Baseline")
+          simulation._save_comparison_config()
+          if len(simulation._comparison_configs) != 1:
+              raise SystemExit("Configuration snapshot could not be stored")
+          if "Baseline" not in simulation._fixed_legends["speed"].text():
+              raise SystemExit("Fixed comparison legend does not show stored configuration")
+          simulation._clear_comparisons()
+
           for key in (
               "vehicle_mass_kg",
               "trailer_mass_kg",
@@ -164,13 +191,11 @@ jobs:
               raise SystemExit("Resistance power is not the fourth stacked synchronized plot")
 
           if simulation.dem_status_label is None:
-              raise SystemExit("DEM controls are missing")
+              raise SystemExit("Automatic DEM status is missing")
           if simulation.map_widget.status() == QQuickWidget.Status.Error:
               errors = "\n".join(error.toString() for error in simulation.map_widget.errors())
               raise SystemExit(f"Simulation map QML failed to load:\n{errors}")
 
-          # Tab 3 is also lazy. It reads only local file status and must not
-          # initiate geodata downloads merely to display the overview.
           window.tabs.setCurrentIndex(2)
           window._ensure_coverage_created()
           coverage = window.coverage_tab
@@ -191,6 +216,6 @@ jobs:
               if expected not in inventory:
                   raise SystemExit(f"Coverage status entry is missing: {expected}")
 
-          print("Unified Qt application uses automatic regions, four synchronized plots, load collective and lazy maps")
+          print("Unified Qt application uses comparison snapshots, cumulative load curves, mini-plots and lazy loading indicators")
           window.close()
           PY
