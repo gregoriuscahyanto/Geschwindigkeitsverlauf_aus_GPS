@@ -34,9 +34,10 @@ APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-from auto_data import DATASETS, prepare_dataset  # noqa: E402
+from auto_data import AUSTRIA_DEM_DIRECTORY, DATASETS, prepare_dataset  # noqa: E402
 from main import RoutePointModel, RouteSelector, TrafficSignalModel  # noqa: E402
 from offline_map import OfflineMapItem  # noqa: E402
+from routing_cache import default_cache_path  # noqa: E402
 
 
 class AutomaticDataWorker(QObject):
@@ -78,6 +79,7 @@ class CompleteApplicationWindow(QMainWindow):
         self._simulation_creating = False
         self.speed_profile: Any | None = None
         self._pending_dem_file = ""
+        self._active_dataset_key = ""
         self.data_root = Path.cwd() / "data"
 
         qmlRegisterType(OfflineMapItem, "OfflineMap", 1, 0, "OfflineMapItem")
@@ -124,13 +126,18 @@ class CompleteApplicationWindow(QMainWindow):
 
         self.route_selector.routeChanged.connect(self._route_changed)
 
+        # Restore already downloaded datasets only after the main window has
+        # entered the event loop. This performs local filesystem checks only;
+        # it never starts a network download during application startup.
+        QTimer.singleShot(0, self._restore_cached_dataset)
+
     def _build_route_page(self) -> QWidget:
         page = QWidget()
         page_layout = QVBoxLayout(page)
         page_layout.setContentsMargins(6, 6, 6, 6)
         page_layout.setSpacing(6)
 
-        data_group = QGroupBox("Daten automatisch vorbereiten")
+        data_group = QGroupBox("Lokale OSM- und Höhendaten")
         group_layout = QVBoxLayout(data_group)
         first_row = QHBoxLayout()
 
@@ -139,12 +146,12 @@ class CompleteApplicationWindow(QMainWindow):
         self.dataset_combo.addItem("Österreich – A10 / Großglockner", "austria")
         self.dataset_combo.addItem("Alpen – grenzüberschreitendes OSM", "alps")
         self.dataset_combo.setToolTip(
-            "Österreich lädt ca. 0,8 GB OSM. Das Alpen-PBF ist deutlich größer. "
-            "Das österreichische 10-m-DGM wird in beiden Fällen als Höhenquelle vorbereitet."
+            "Vorhandene lokale Daten werden beim Programmstart automatisch erkannt und aktiviert. "
+            "Der Button lädt nur fehlende Dateien bzw. bereitet fehlende Indizes vor."
         )
         first_row.addWidget(self.dataset_combo, 1)
 
-        self.prepare_data_button = QPushButton("OSM + Höhen automatisch laden")
+        self.prepare_data_button = QPushButton("OSM + Höhen prüfen / laden")
         self.prepare_data_button.clicked.connect(self._start_data_preparation)
         first_row.addWidget(self.prepare_data_button)
         group_layout.addLayout(first_row)
@@ -155,7 +162,7 @@ class CompleteApplicationWindow(QMainWindow):
         self.data_progress.setValue(0)
         second_row.addWidget(self.data_progress, 1)
         self.data_status = QLabel(
-            "Einmalig Internet erforderlich; danach werden OSM, Routingindex und DGM lokal wiederverwendet."
+            "Suche beim Start nach bereits vorhandenen lokalen OSM-, Routing- und Höhendaten …"
         )
         self.data_status.setWordWrap(True)
         second_row.addWidget(self.data_status, 2)
@@ -184,6 +191,106 @@ class CompleteApplicationWindow(QMainWindow):
         layout.addWidget(label)
         layout.addStretch(1)
         return page
+
+    def _cached_dataset(self, dataset_key: str) -> dict[str, str] | None:
+        dataset = DATASETS.get(dataset_key)
+        if dataset is None:
+            return None
+
+        pbf_path = (self.data_root / "osm" / str(dataset["osm_filename"])).resolve()
+        if not pbf_path.is_file() or pbf_path.stat().st_size <= 0:
+            return None
+
+        cache_path = Path(default_cache_path(pbf_path)).resolve()
+        if not cache_path.is_file() or cache_path.stat().st_size <= 0:
+            return None
+
+        dem_directory = self.data_root / "elevation" / AUSTRIA_DEM_DIRECTORY
+        dem_path: Path | None = None
+        if dem_directory.is_dir():
+            for pattern in ("*.tif", "*.tiff"):
+                candidate = next(dem_directory.rglob(pattern), None)
+                if candidate is not None and candidate.is_file() and candidate.stat().st_size > 0:
+                    dem_path = candidate.resolve()
+                    break
+        if dem_path is None:
+            return None
+
+        return {
+            "dataset": dataset_key,
+            "pbf_file": str(pbf_path),
+            "roads_file": str(cache_path),
+            "dem_file": str(dem_path),
+            "data_root": str(self.data_root.resolve()),
+        }
+
+    @Slot()
+    def _restore_cached_dataset(self) -> None:
+        # Prefer the currently selected preset, then fall back to any other
+        # complete local dataset. This is intentionally network-free.
+        preferred = str(self.dataset_combo.currentData())
+        keys = [preferred] + [key for key in DATASETS if key != preferred]
+        for dataset_key in keys:
+            result = self._cached_dataset(dataset_key)
+            if result is None:
+                continue
+
+            index = self.dataset_combo.findData(dataset_key)
+            if index >= 0:
+                self.dataset_combo.setCurrentIndex(index)
+            self._activate_prepared_data(result, restored=True)
+            return
+
+        self.data_status.setText(
+            "Noch kein vollständiger lokaler Datensatz erkannt. Beim ersten Mal werden nur fehlende "
+            "OSM-/Höhendaten geladen; danach werden sie lokal wiederverwendet."
+        )
+        self.data_progress.setValue(0)
+
+    def _activate_prepared_data(
+        self,
+        result: dict[str, Any],
+        *,
+        restored: bool = False,
+    ) -> None:
+        dataset_key = str(result.get("dataset", ""))
+        roads_file = str(result.get("roads_file", ""))
+        dem_file = str(result.get("dem_file", ""))
+
+        if roads_file:
+            self.route_selector._set_roads_file(roads_file)
+        if dem_file:
+            self._pending_dem_file = dem_file
+            if self.speed_profile is not None:
+                try:
+                    self.speed_profile.set_dem_path(dem_file)
+                except Exception as exc:
+                    self.data_status.setText(
+                        f"Routingdaten aktiv; Höhenmodell konnte nicht aktiviert werden: {exc}"
+                    )
+                    return
+
+        self._active_dataset_key = dataset_key
+        self.data_progress.setValue(100)
+        if restored:
+            self.data_status.setText(
+                "✓ Bereits heruntergeladene OSM-, Routing- und Höhendaten automatisch erkannt und aktiviert. "
+                "Kein erneuter Download erforderlich."
+            )
+        elif dem_file and self.speed_profile is None:
+            self.data_status.setText(
+                "Fertig: Routingindex und Höhenmodell sind lokal bereit. Das DEM wird beim Öffnen von Tab 2 aktiviert."
+            )
+        elif dem_file:
+            self.data_status.setText(
+                "Fertig: lokaler Routingindex und Höhenmodell sind aktiv."
+            )
+        else:
+            self.data_status.setText("Fertig: lokale Routingdaten sind aktiv.")
+
+        self.route_selector.statusChanged.emit(
+            "Lokale Straßendaten sind aktiv – Start und Ziel auswählen."
+        )
 
     @Slot(int)
     def _tab_changed(self, index: int) -> None:
@@ -262,10 +369,17 @@ class CompleteApplicationWindow(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 return
 
+        # Fast path: if the selected dataset is already complete locally, just
+        # activate it. No worker, checksum request or network connection needed.
+        cached = self._cached_dataset(dataset_key)
+        if cached is not None:
+            self._activate_prepared_data(cached, restored=True)
+            return
+
         self.prepare_data_button.setEnabled(False)
         self.dataset_combo.setEnabled(False)
         self.data_progress.setValue(0)
-        self.data_status.setText("Datenvorbereitung wird gestartet …")
+        self.data_status.setText("Prüfe lokale Dateien und lade nur fehlende Daten …")
 
         thread = QThread(self)
         worker = AutomaticDataWorker(dataset_key, self.data_root)
@@ -290,33 +404,7 @@ class CompleteApplicationWindow(QMainWindow):
 
     @Slot("QVariantMap")
     def _data_preparation_finished(self, result: dict[str, Any]) -> None:
-        roads_file = str(result.get("roads_file", ""))
-        dem_file = str(result.get("dem_file", ""))
-        if roads_file:
-            self.route_selector._set_roads_file(roads_file)
-        if dem_file:
-            self._pending_dem_file = dem_file
-            if self.speed_profile is not None:
-                try:
-                    self.speed_profile.set_dem_path(dem_file)
-                except Exception as exc:
-                    self.data_status.setText(
-                        f"Routingdaten bereit; Höhenmodell konnte nicht aktiviert werden: {exc}"
-                    )
-                else:
-                    self.data_status.setText(
-                        "Fertig: lokaler Routingindex und österreichisches 10-m-Höhenmodell sind aktiv."
-                    )
-            else:
-                self.data_status.setText(
-                    "Fertig: Routingindex und Höhenmodell sind bereit. Das DEM wird beim Öffnen von Tab 2 aktiviert."
-                )
-        else:
-            self.data_status.setText("Fertig: lokale Routingdaten sind aktiv.")
-        self.data_progress.setValue(100)
-        self.route_selector.statusChanged.emit(
-            "Automatisch vorbereitete Straßendaten sind aktiv – Start und Ziel auswählen."
-        )
+        self._activate_prepared_data(result)
 
     @Slot(str)
     def _data_preparation_failed(self, message: str) -> None:
