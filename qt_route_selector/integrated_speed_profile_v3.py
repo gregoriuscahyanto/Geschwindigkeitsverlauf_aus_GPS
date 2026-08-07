@@ -13,14 +13,35 @@ except ImportError:
 
 
 class IntegratedSpeedProfileWindow(_BaseWindow):
-    """UI refinement with three stacked plots and the map on the right."""
+    """UI refinement with three stacked plots and the map on the right.
+
+    Route loading is deliberately deferred during construction. The base live
+    editor normally loads and simulates an existing route_result.json from its
+    constructor, which can block the GUI before the main application window is
+    shown. The complete application triggers reload_route() only when the
+    simulation tab is opened or a newly calculated route arrives.
+    """
 
     def __init__(self, route_path: str | Path | None = None) -> None:
-        # Base constructors call self._update_plots() before the integrated
-        # widgets (speed_plot, map_widget, ...) have been created. Keep the v3
-        # layout hook disabled until the complete base UI exists.
         self._v3_layout_ready = False
-        super().__init__(route_path)
+
+        actual_route_path = Path(route_path or "route_result.json").expanduser().resolve()
+        deferred_route_path = actual_route_path.with_name(
+            f".__startup_deferred_{actual_route_path.name}"
+        )
+
+        # The base constructor calls reload_route(silent=True). Give it a
+        # guaranteed non-existing path so startup never performs route parsing
+        # or a full speed simulation synchronously before the window is shown.
+        super().__init__(deferred_route_path)
+
+        self._route_path = actual_route_path
+        if hasattr(self, "route_path_label"):
+            self.route_path_label.setText(str(actual_route_path))
+        self.statusBar().showMessage(
+            "Bereit – Route wird beim Öffnen des Simulation-Tabs oder nach einer neuen Berechnung geladen."
+        )
+
         self._v3_layout_ready = True
         self._apply_plot_layout()
         QTimer.singleShot(0, self._apply_plot_layout)
@@ -130,6 +151,9 @@ def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     window = IntegratedSpeedProfileWindow(Path.cwd() / "route_result.json")
     window.show()
+    # Standalone mode still loads an existing route, but only after the window
+    # has entered the event loop and can paint before the calculation starts.
+    QTimer.singleShot(120, lambda: window.reload_route(silent=True))
     return app.exec()
 
 
