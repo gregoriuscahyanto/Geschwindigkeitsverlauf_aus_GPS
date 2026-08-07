@@ -135,10 +135,10 @@ def calculate_resistance_power(
 
     if len(time) >= 2:
         traction_energy_kwh = float(
-            np.trapezoid(np.maximum(total_kw, 0.0), time) / 3600.0
+            np.trapz(np.maximum(total_kw, 0.0), time) / 3600.0
         )
         braking_energy_kwh = float(
-            np.trapezoid(np.maximum(-total_kw, 0.0), time) / 3600.0
+            np.trapz(np.maximum(-total_kw, 0.0), time) / 3600.0
         )
     else:
         traction_energy_kwh = 0.0
