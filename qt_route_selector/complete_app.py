@@ -5,10 +5,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Qt Quick / QtLocation can stall on some Windows enterprise GPU drivers or
-# remote-desktop setups. Select the software scene-graph backend before any
-# PySide6 module is imported. Users can still override it explicitly by setting
-# QT_QUICK_BACKEND in their environment before launching the app.
 if sys.platform.startswith("win"):
     os.environ.setdefault("QT_QUICK_BACKEND", "software")
 
@@ -34,10 +30,25 @@ APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-from auto_data import AUSTRIA_DEM_DIRECTORY, DATASETS, prepare_dataset  # noqa: E402
+from auto_data import (  # noqa: E402
+    DATASETS,
+    cached_dataset,
+    points_within_dataset,
+    prepare_dataset,
+    prepare_elevation_for_route,
+)
 from main import RoutePointModel, RouteSelector, TrafficSignalModel  # noqa: E402
 from offline_map import OfflineMapItem  # noqa: E402
-from routing_cache import default_cache_path  # noqa: E402
+
+
+DATASET_ORDER = (
+    "baden_wuerttemberg",
+    "bayern",
+    "hessen",
+    "switzerland",
+    "austria",
+    "dach",
+)
 
 
 class AutomaticDataWorker(QObject):
@@ -64,6 +75,37 @@ class AutomaticDataWorker(QObject):
             self.finished.emit(result)
 
 
+class AutomaticElevationWorker(QObject):
+    progress = Signal(str, int)
+    finished = Signal("QVariantMap")
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        dataset_key: str,
+        data_root: Path,
+        route_points: list[dict[str, Any]],
+    ) -> None:
+        super().__init__()
+        self.dataset_key = dataset_key
+        self.data_root = data_root
+        self.route_points = route_points
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = prepare_elevation_for_route(
+                self.dataset_key,
+                self.data_root,
+                self.route_points,
+                progress=lambda text, percent: self.progress.emit(text, percent),
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        else:
+            self.finished.emit(result)
+
+
 class CompleteApplicationWindow(QMainWindow):
     """One desktop window containing routing and lazily created simulation."""
 
@@ -75,8 +117,11 @@ class CompleteApplicationWindow(QMainWindow):
 
         self._data_thread: QThread | None = None
         self._data_worker: AutomaticDataWorker | None = None
+        self._elevation_thread: QThread | None = None
+        self._elevation_worker: AutomaticElevationWorker | None = None
         self._simulation_load_pending = True
         self._simulation_creating = False
+        self._border_prompt_active = False
         self.speed_profile: Any | None = None
         self._pending_dem_file = ""
         self._active_dataset_key = ""
@@ -125,10 +170,8 @@ class CompleteApplicationWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
 
         self.route_selector.routeChanged.connect(self._route_changed)
+        self.route_selector.selectionChanged.connect(self._selection_changed)
 
-        # Restore already downloaded datasets only after the main window has
-        # entered the event loop. This performs local filesystem checks only;
-        # it never starts a network download during application startup.
         QTimer.singleShot(0, self._restore_cached_dataset)
 
     def _build_route_page(self) -> QWidget:
@@ -143,12 +186,15 @@ class CompleteApplicationWindow(QMainWindow):
 
         first_row.addWidget(QLabel("Gebiet:"))
         self.dataset_combo = QComboBox()
-        self.dataset_combo.addItem("Österreich – A10 / Großglockner", "austria")
-        self.dataset_combo.addItem("Alpen – grenzüberschreitendes OSM", "alps")
+        for key in DATASET_ORDER:
+            dataset = DATASETS[key]
+            self.dataset_combo.addItem(str(dataset["label"]), key)
         self.dataset_combo.setToolTip(
-            "Vorhandene lokale Daten werden beim Programmstart automatisch erkannt und aktiviert. "
-            "Der Button lädt nur fehlende Dateien bzw. bereitet fehlende Indizes vor."
+            "Regionale OSM-Daten werden lokal gespeichert. Bei einer grenzüberschreitenden "
+            "Route wird auf den gemeinsamen DACH-Extrakt umgestellt. Höhenkacheln werden "
+            "für die konkrete Route automatisch geladen und gecacht."
         )
+        self.dataset_combo.currentIndexChanged.connect(self._dataset_combo_changed)
         first_row.addWidget(self.dataset_combo, 1)
 
         self.prepare_data_button = QPushButton("OSM + Höhen prüfen / laden")
@@ -192,58 +238,51 @@ class CompleteApplicationWindow(QMainWindow):
         layout.addStretch(1)
         return page
 
-    def _cached_dataset(self, dataset_key: str) -> dict[str, str] | None:
-        dataset = DATASETS.get(dataset_key)
-        if dataset is None:
-            return None
-
-        pbf_path = (self.data_root / "osm" / str(dataset["osm_filename"])).resolve()
-        if not pbf_path.is_file() or pbf_path.stat().st_size <= 0:
-            return None
-
-        cache_path = Path(default_cache_path(pbf_path)).resolve()
-        if not cache_path.is_file() or cache_path.stat().st_size <= 0:
-            return None
-
-        dem_directory = self.data_root / "elevation" / AUSTRIA_DEM_DIRECTORY
-        dem_path: Path | None = None
-        if dem_directory.is_dir():
-            for pattern in ("*.tif", "*.tiff"):
-                candidate = next(dem_directory.rglob(pattern), None)
-                if candidate is not None and candidate.is_file() and candidate.stat().st_size > 0:
-                    dem_path = candidate.resolve()
-                    break
-        if dem_path is None:
-            return None
-
-        return {
-            "dataset": dataset_key,
-            "pbf_file": str(pbf_path),
-            "roads_file": str(cache_path),
-            "dem_file": str(dem_path),
-            "data_root": str(self.data_root.resolve()),
-        }
+    @Slot(int)
+    def _dataset_combo_changed(self, _index: int) -> None:
+        dataset_key = str(self.dataset_combo.currentData())
+        if not dataset_key:
+            return
+        cached = cached_dataset(dataset_key, self.data_root)
+        if cached is not None:
+            self._activate_prepared_data(cached, restored=True)
+        elif dataset_key == "dach":
+            self.data_status.setText(
+                "DACH deckt Deutschland, Österreich und die Schweiz grenzüberschreitend ab. "
+                "Der Geofabrik-Extrakt ist groß und wird erst nach Bestätigung geladen."
+            )
+            self.data_progress.setValue(0)
+        else:
+            self.data_status.setText(
+                f"{DATASETS[dataset_key]['label']} ist noch nicht lokal vorbereitet. "
+                "Der Button lädt nur fehlende Dateien; Höhendaten kommen automatisch entlang der Route."
+            )
+            self.data_progress.setValue(0)
 
     @Slot()
     def _restore_cached_dataset(self) -> None:
-        # Prefer the currently selected preset, then fall back to any other
-        # complete local dataset. This is intentionally network-free.
-        preferred = str(self.dataset_combo.currentData())
-        keys = [preferred] + [key for key in DATASETS if key != preferred]
+        saved = str(
+            self.route_selector.settings.value("active_dataset_key", "") or ""
+        )
+        preferred = saved if saved in DATASETS else str(self.dataset_combo.currentData())
+        keys = [preferred] + [key for key in DATASET_ORDER if key != preferred]
         for dataset_key in keys:
-            result = self._cached_dataset(dataset_key)
+            result = cached_dataset(dataset_key, self.data_root)
             if result is None:
                 continue
-
             index = self.dataset_combo.findData(dataset_key)
-            if index >= 0:
-                self.dataset_combo.setCurrentIndex(index)
+            self.dataset_combo.blockSignals(True)
+            try:
+                if index >= 0:
+                    self.dataset_combo.setCurrentIndex(index)
+            finally:
+                self.dataset_combo.blockSignals(False)
             self._activate_prepared_data(result, restored=True)
             return
 
         self.data_status.setText(
-            "Noch kein vollständiger lokaler Datensatz erkannt. Beim ersten Mal werden nur fehlende "
-            "OSM-/Höhendaten geladen; danach werden sie lokal wiederverwendet."
+            "Noch kein lokaler Routingdatensatz erkannt. Gebiet wählen und einmalig vorbereiten; "
+            "danach werden OSM und Höhenkacheln aus dem Cache wiederverwendet."
         )
         self.data_progress.setValue(0)
 
@@ -271,26 +310,90 @@ class CompleteApplicationWindow(QMainWindow):
                     return
 
         self._active_dataset_key = dataset_key
+        if dataset_key:
+            self.route_selector.settings.setValue("active_dataset_key", dataset_key)
         self.data_progress.setValue(100)
-        if restored:
+        label = str(DATASETS.get(dataset_key, {}).get("label", dataset_key))
+        if restored and dem_file:
             self.data_status.setText(
-                "✓ Bereits heruntergeladene OSM-, Routing- und Höhendaten automatisch erkannt und aktiviert. "
-                "Kein erneuter Download erforderlich."
+                f"✓ {label}: vorhandene OSM-, Routing- und Höhendaten automatisch aktiviert."
+            )
+        elif restored:
+            self.data_status.setText(
+                f"✓ {label}: lokaler Routingindex automatisch aktiviert. "
+                "Benötigte Höhenkacheln werden nach der Routenberechnung automatisch ergänzt."
             )
         elif dem_file and self.speed_profile is None:
             self.data_status.setText(
-                "Fertig: Routingindex und Höhenmodell sind lokal bereit. Das DEM wird beim Öffnen von Tab 2 aktiviert."
+                f"Fertig: {label}-Routing und Höhenmodell sind lokal bereit."
             )
         elif dem_file:
             self.data_status.setText(
-                "Fertig: lokaler Routingindex und Höhenmodell sind aktiv."
+                f"Fertig: {label}-Routing und Höhenmodell sind aktiv."
             )
         else:
-            self.data_status.setText("Fertig: lokale Routingdaten sind aktiv.")
+            self.data_status.setText(
+                f"Fertig: {label}-Routing ist aktiv. Höhenkacheln folgen automatisch mit der Route."
+            )
 
         self.route_selector.statusChanged.emit(
             "Lokale Straßendaten sind aktiv – Start und Ziel auswählen."
         )
+
+    @Slot("QVariantMap")
+    def _selection_changed(self, data: dict[str, Any]) -> None:
+        if self._border_prompt_active or self._data_thread is not None:
+            return
+        dataset_key = self._active_dataset_key
+        if not dataset_key or dataset_key == "dach":
+            return
+        points = data.get("points", []) if isinstance(data, dict) else []
+        if not isinstance(points, list) or len(points) < 2:
+            return
+
+        inside = points_within_dataset(dataset_key, self.data_root, points)
+        if inside is not False:
+            return
+
+        dach_index = self.dataset_combo.findData("dach")
+        if dach_index >= 0:
+            self.dataset_combo.blockSignals(True)
+            try:
+                self.dataset_combo.setCurrentIndex(dach_index)
+            finally:
+                self.dataset_combo.blockSignals(False)
+
+        cached = cached_dataset("dach", self.data_root)
+        if cached is not None:
+            self._activate_prepared_data(cached, restored=True)
+            self.data_status.setText(
+                "Grenzübertritt erkannt: vorhandener DACH-Routingindex wurde automatisch aktiviert."
+            )
+            return
+
+        self._border_prompt_active = True
+        try:
+            answer = QMessageBox.question(
+                self,
+                "Route verlässt das gewählte Gebiet",
+                "Mindestens ein ausgewählter Punkt liegt außerhalb des aktiven regionalen "
+                "Geofabrik-Extrakts. Für eine durchgehende Route über Gebiets- oder Landesgrenzen "
+                "kann die App den gemeinsamen DACH-Datensatz (Deutschland, Österreich, Schweiz) "
+                "automatisch herunterladen und lokal indexieren. Der OSM-PBF ist etwa 5,8 GB groß.\n\n"
+                "DACH jetzt automatisch vorbereiten?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+        finally:
+            self._border_prompt_active = False
+
+        if answer == QMessageBox.StandardButton.Yes:
+            self._start_dataset_preparation("dach", confirm_large=False)
+        else:
+            self.data_status.setText(
+                "Grenzübertritt erkannt. Mit dem regionalen Extrakt kann die Route außerhalb des "
+                "Gebiets unvollständig sein; für Grenzfahrten DACH vorbereiten."
+            )
 
     @Slot(int)
     def _tab_changed(self, index: int) -> None:
@@ -350,28 +453,32 @@ class CompleteApplicationWindow(QMainWindow):
 
     @Slot()
     def _start_data_preparation(self) -> None:
-        if self._data_thread is not None:
-            return
         dataset_key = str(self.dataset_combo.currentData())
-        if dataset_key not in DATASETS:
+        self._start_dataset_preparation(dataset_key, confirm_large=True)
+
+    def _start_dataset_preparation(
+        self,
+        dataset_key: str,
+        *,
+        confirm_large: bool,
+    ) -> None:
+        if self._data_thread is not None or dataset_key not in DATASETS:
             return
 
-        if dataset_key == "alps":
+        if confirm_large and bool(DATASETS[dataset_key].get("large_download")):
             answer = QMessageBox.question(
                 self,
-                "Großer OSM-Datensatz",
-                "Der Geofabrik-Alpen-Extrakt ist über 2 GB groß. Für Tauernautobahn und "
-                "Großglockner reicht der wesentlich kleinere Österreich-Datensatz.\n\n"
-                "Alpen-Datensatz trotzdem herunterladen?",
+                "Großer grenzüberschreitender Datensatz",
+                "Der Geofabrik-DACH-Extrakt umfasst Deutschland, Österreich und die Schweiz und "
+                "ist aktuell etwa 5,8 GB groß. Er ist nur nötig, wenn eine Route Gebiets- oder "
+                "Landesgrenzen überschreiten soll.\n\nDatensatz jetzt automatisch herunterladen?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
 
-        # Fast path: if the selected dataset is already complete locally, just
-        # activate it. No worker, checksum request or network connection needed.
-        cached = self._cached_dataset(dataset_key)
+        cached = cached_dataset(dataset_key, self.data_root)
         if cached is not None:
             self._activate_prepared_data(cached, restored=True)
             return
@@ -379,7 +486,7 @@ class CompleteApplicationWindow(QMainWindow):
         self.prepare_data_button.setEnabled(False)
         self.dataset_combo.setEnabled(False)
         self.data_progress.setValue(0)
-        self.data_status.setText("Prüfe lokale Dateien und lade nur fehlende Daten …")
+        self.data_status.setText("Prüfe lokale Dateien und lade nur fehlende Routingdaten …")
 
         thread = QThread(self)
         worker = AutomaticDataWorker(dataset_key, self.data_root)
@@ -418,10 +525,74 @@ class CompleteApplicationWindow(QMainWindow):
         self.prepare_data_button.setEnabled(True)
         self.dataset_combo.setEnabled(True)
 
+    def _start_route_elevation(self, points: list[dict[str, Any]]) -> None:
+        dataset_key = self._active_dataset_key
+        if not dataset_key or self._elevation_thread is not None or len(points) < 2:
+            return
+
+        if dataset_key == "austria" and self._pending_dem_file:
+            return
+
+        thread = QThread(self)
+        worker = AutomaticElevationWorker(dataset_key, self.data_root, list(points))
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._elevation_progress_changed)
+        worker.finished.connect(self._elevation_finished)
+        worker.failed.connect(self._elevation_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._elevation_thread_finished)
+        self._elevation_thread = thread
+        self._elevation_worker = worker
+        self.data_status.setText("Höhendaten für die berechnete Route werden automatisch vorbereitet …")
+        self.data_progress.setValue(0)
+        thread.start()
+
+    @Slot(str, int)
+    def _elevation_progress_changed(self, text: str, percent: int) -> None:
+        self.data_status.setText(text)
+        self.data_progress.setValue(percent)
+
+    @Slot("QVariantMap")
+    def _elevation_finished(self, result: dict[str, Any]) -> None:
+        dem_file = str(result.get("dem_file", ""))
+        tile_count = int(result.get("tile_count", 0) or 0)
+        provider = str(result.get("provider", ""))
+        if dem_file:
+            self._pending_dem_file = dem_file
+            if self.speed_profile is not None:
+                try:
+                    self.speed_profile.set_dem_path(dem_file)
+                except Exception as exc:
+                    self.data_status.setText(f"Höhendaten geladen, aber Aktivierung fehlgeschlagen: {exc}")
+                    return
+        self.data_progress.setValue(100)
+        if provider == "austria_dgm10":
+            self.data_status.setText("Österreichisches 10-m-Höhenmodell ist für die Route aktiv.")
+        else:
+            self.data_status.setText(
+                f"Höhendaten bereit: {tile_count} Copernicus-GLO-30-Kachel(n) automatisch geladen/gecacht."
+            )
+
+    @Slot(str)
+    def _elevation_failed(self, message: str) -> None:
+        self.data_status.setText(
+            f"Route ist berechnet; Höhendaten konnten nicht automatisch geladen werden: {message}"
+        )
+
+    @Slot()
+    def _elevation_thread_finished(self) -> None:
+        self._elevation_thread = None
+        self._elevation_worker = None
+
     def _route_changed(self, points: list[dict[str, Any]]) -> None:
         if len(points) <= 1:
             return
         self._simulation_load_pending = True
+        self._start_route_elevation(points)
         if self.tabs.currentIndex() == 1 and self.speed_profile is not None:
             QTimer.singleShot(80, self._load_pending_simulation)
 
