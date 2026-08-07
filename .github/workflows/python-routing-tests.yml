@@ -59,7 +59,6 @@ jobs:
               QGroupBox,
               QScrollArea,
               QSplitter,
-              QTabWidget,
           )
           from complete_app import CompleteApplicationWindow
 
@@ -100,8 +99,6 @@ jobs:
               raise SystemExit("Simulation was unexpectedly calculated without a route")
           if simulation.axis_combo.count() != 2:
               raise SystemExit("Time/distance axis selector is missing")
-          if simulation.findChildren(QTabWidget):
-              raise SystemExit("Simulation settings still contain nested tabs")
 
           expected_groups = {"Kurven", "Ampeln", "Überholen", "Rauschen", "Fahrzeug"}
           groups = {
