@@ -19,6 +19,9 @@ qt_route_selector/route_result.json
 qt_route_selector/speed_profile_result.json
 qt_route_selector/speed_profile_result.csv
 
+# Automatically downloaded OSM and elevation data
+/data/
+
 # Generated local routing indexes
 *_routing.gpkg
 *.building.gpkg
