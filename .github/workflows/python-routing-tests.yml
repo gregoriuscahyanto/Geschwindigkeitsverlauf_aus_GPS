@@ -67,6 +67,13 @@ jobs:
           if "Geschwindigkeitsverlauf" not in window.tabs.tabText(1):
               raise SystemExit("Simulation tab was not created")
 
+          if window.dataset_combo.count() < 2:
+              raise SystemExit("Automatic Austria/Alps data assistant is missing")
+          if window.dataset_combo.itemData(0) != "austria":
+              raise SystemExit("Austria is not the default automatic dataset")
+          if not hasattr(window.speed_profile, "set_dem_path"):
+              raise SystemExit("Programmatic DEM activation is missing")
+
           simulation = window.speed_profile
           if simulation.axis_combo.count() != 2:
               raise SystemExit("Time/distance axis selector is missing")
