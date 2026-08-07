@@ -27,13 +27,13 @@ from PySide6.QtWidgets import (
 
 try:
     from .enhanced_speed_simulation import simulate_speed_profile as _enhanced_simulate
-    from .integrated_speed_profile_v3 import IntegratedSpeedProfileWindow as _V3Window
+    from .integrated_speed_profile_v3_base import IntegratedSpeedProfileWindow as _V3Window
     from .load_collective_curve import cumulative_load_curve
     from .resistance_power import calculate_resistance_power, road_grade
     from .technical_previews import TechnicalPreviewController
 except ImportError:
     from enhanced_speed_simulation import simulate_speed_profile as _enhanced_simulate
-    from integrated_speed_profile_v3 import IntegratedSpeedProfileWindow as _V3Window
+    from integrated_speed_profile_v3_base import IntegratedSpeedProfileWindow as _V3Window
     from load_collective_curve import cumulative_load_curve
     from resistance_power import calculate_resistance_power, road_grade
     from technical_previews import TechnicalPreviewController
@@ -91,9 +91,6 @@ class IntegratedSpeedProfileWindow(_V3Window):
         self._update_fixed_legends()
         self._apply_plot_layout()
 
-    # ------------------------------------------------------------------
-    # Small UX helpers
-    # ------------------------------------------------------------------
     @staticmethod
     def _legend_html(entries: list[tuple[str, tuple[int, int, int]]]) -> str:
         parts: list[str] = []
@@ -155,9 +152,6 @@ class IntegratedSpeedProfileWindow(_V3Window):
         if self._result is not None and not self._comparison_configs:
             self._focus_speed_axis()
 
-    # ------------------------------------------------------------------
-    # Automatic DEM only + smoothed visible elevation
-    # ------------------------------------------------------------------
     def _remove_manual_dem_buttons(self) -> None:
         for button in self.findChildren(QPushButton):
             if button.text() in {"DEM / GeoTIFF wählen", "DEM entfernen"}:
@@ -236,9 +230,6 @@ class IntegratedSpeedProfileWindow(_V3Window):
         )
         return self._smooth_distance_series(sample_distance, raw, window)
 
-    # ------------------------------------------------------------------
-    # Snapshot-based multi-configuration comparison
-    # ------------------------------------------------------------------
     def _install_comparison_controls(self) -> None:
         driver_group = next(
             (group for group in self.findChildren(QGroupBox) if group.title() == "Fahrer"),
@@ -361,9 +352,6 @@ class IntegratedSpeedProfileWindow(_V3Window):
         if not self._loading_parameters:
             super().schedule_recalculate(*_args)
 
-    # ------------------------------------------------------------------
-    # Fixed, non-movable legends
-    # ------------------------------------------------------------------
     def _legend_label(self) -> QLabel:
         label = QLabel()
         label.setTextFormat(Qt.TextFormat.RichText)
@@ -424,9 +412,6 @@ class IntegratedSpeedProfileWindow(_V3Window):
             self._fixed_legends["collective"].setText("Kumulierte Lastdauerlinie")
         self._hide_builtin_legends()
 
-    # ------------------------------------------------------------------
-    # Cumulative load-duration curve
-    # ------------------------------------------------------------------
     def _install_collective_controls(self) -> None:
         right_layout = self.right_analysis_panel.layout() if self.right_analysis_panel else None
         if not isinstance(right_layout, QVBoxLayout):
@@ -485,9 +470,6 @@ class IntegratedSpeedProfileWindow(_V3Window):
         self.load_collective_plot.showGrid(x=True, y=True, alpha=0.25)
         self.load_collective_plot.enableAutoRange()
 
-    # ------------------------------------------------------------------
-    # Comparison simulation and plotting
-    # ------------------------------------------------------------------
     def _resistance_for_result(
         self,
         result: dict[str, Any],
