@@ -1,15 +1,10 @@
-*.gpx
-augmented/
-results/
-slprj/
-
-# Python virtual environments and caches
+# Python
 .venv/
 venv/
 __pycache__/
 *.py[cod]
 
-# Local route-selector and simulation output
+# Local application output
 selected_region.json
 route_result.json
 speed_profile_result.json
@@ -19,11 +14,15 @@ qt_route_selector/route_result.json
 qt_route_selector/speed_profile_result.json
 qt_route_selector/speed_profile_result.csv
 
-# Automatically downloaded OSM and elevation data
+# Downloaded/generated geodata
 /data/
-
-# Generated local routing indexes
+*.osm.pbf
+*.fgb
 *_routing.gpkg
 *.building.gpkg
 
-*.osm.pbf
+# Editors / operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
