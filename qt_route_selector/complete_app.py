@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import os
 import sys
 
-from PySide6.QtCore import QObject, Qt
+from PySide6.QtCore import QObject, QTimer, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QProgressBar,
     QVBoxLayout,
     QWidget,
@@ -16,16 +18,23 @@ from PySide6.QtWidgets import (
 try:
     from .complete_app_base import *  # noqa: F401,F403
     from .complete_app_base import CompleteApplicationWindow as _BaseWindow
+    from .runtime_paths import data_dir, prepare_runtime_directories, route_result_path, state_dir
 except ImportError:
     from complete_app_base import *  # type: ignore  # noqa: F401,F403
     from complete_app_base import CompleteApplicationWindow as _BaseWindow
+    from runtime_paths import data_dir, prepare_runtime_directories, route_result_path, state_dir
 
 
 class CompleteApplicationWindow(_BaseWindow):
     """Complete app with a compact automatic-first routing workflow."""
 
     def __init__(self, *args, **kwargs) -> None:
+        runtime_data = data_dir()
         super().__init__(*args, **kwargs)
+        # The legacy base class historically used ``Path.cwd() / 'data'``.
+        # Override it before its zero-delay restore callback runs so all OSM,
+        # DEM and routing-cache data live in the per-user application folder.
+        self.data_root = runtime_data
         self._stabilize_qml_backend_lifetimes()
         self.setMinimumSize(920, 640)
         if hasattr(self, "route_container"):
@@ -33,13 +42,7 @@ class CompleteApplicationWindow(_BaseWindow):
         self._hide_manual_road_data_button()
 
     def _stabilize_qml_backend_lifetimes(self) -> None:
-        """Keep context objects alive until the QQmlApplicationEngine is torn down.
-
-        Without QObject ownership, Python attribute destruction during application
-        shutdown can release a context object before QML has finished evaluating
-        its final bindings. On Windows this showed up as repeated
-        ``Cannot read property ... of null`` messages from main.qml.
-        """
+        """Keep context objects alive until the QQmlApplicationEngine is torn down."""
         engine = getattr(self, "qml_engine", None)
         if engine is None:
             return
@@ -150,12 +153,45 @@ class CompleteApplicationWindow(_BaseWindow):
         return page
 
     def _ensure_simulation_created(self) -> None:
+        """Create the current public simulation UI using the runtime state file."""
+        if self.speed_profile is not None or self._simulation_creating:
+            return
+        if self.tabs.currentIndex() != 1:
+            return
         if hasattr(self, "simulation_loading_label"):
             self.simulation_loading_label.setText(
                 "Geschwindigkeitsverlauf wird geladen …\n\nPlots, Vergleichswerkzeuge und Karte werden initialisiert."
             )
         QApplication.processEvents()
-        super()._ensure_simulation_created()
+
+        self._simulation_creating = True
+        try:
+            try:
+                from .integrated_speed_profile import IntegratedSpeedProfileWindow
+            except ImportError:
+                from integrated_speed_profile import IntegratedSpeedProfileWindow
+
+            simulation = IntegratedSpeedProfileWindow(route_result_path())
+            simulation.setWindowFlags(Qt.WindowType.Widget)
+            if self._pending_dem_file:
+                simulation.set_dem_path(self._pending_dem_file)
+            self.speed_profile = simulation
+            self.tabs.blockSignals(True)
+            try:
+                self.tabs.removeTab(1)
+                self.tabs.insertTab(1, simulation, "2 · Geschwindigkeitsverlauf")
+                self.tabs.setCurrentIndex(1)
+            finally:
+                self.tabs.blockSignals(False)
+        except Exception as exc:
+            QMessageBox.critical(self, "Simulation konnte nicht initialisiert werden", str(exc))
+            self.tabs.setCurrentIndex(0)
+            return
+        finally:
+            self._simulation_creating = False
+
+        if self._simulation_load_pending:
+            QTimer.singleShot(80, self._load_pending_simulation)
 
     def _ensure_coverage_created(self) -> None:
         if hasattr(self, "coverage_loading_label"):
@@ -167,8 +203,15 @@ class CompleteApplicationWindow(_BaseWindow):
 
 
 def main() -> int:
+    paths = prepare_runtime_directories()
+    # RouteSelector still writes its transient route JSONs relative to the
+    # process working directory. Run the application from its dedicated state
+    # directory so those files never pollute the source checkout.
+    os.chdir(paths["state"])
+
     app = QApplication(sys.argv)
-    app.setApplicationName("GPS Route and Live Speed Profile")
+    app.setApplicationName("GPS-Routenplaner")
+    app.setApplicationDisplayName("GPS-Routenplaner und Geschwindigkeitsverlauf")
     app.setOrganizationName("GPSDrivingSimulation")
     window = CompleteApplicationWindow()
     window.show()
