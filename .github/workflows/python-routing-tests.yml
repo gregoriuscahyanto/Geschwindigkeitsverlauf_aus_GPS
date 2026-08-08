@@ -141,9 +141,12 @@ jobs:
               "collective_log_check",
               "elevation_smoothing_spin",
               "preview_controller",
+              "plot_stack_splitter",
+              "right_vertical_splitter",
+              "toggle_parameters_button",
           ):
               if not hasattr(simulation, attribute) or getattr(simulation, attribute) is None:
-                  raise SystemExit(f"V4 simulation UX is missing: {attribute}")
+                  raise SystemExit(f"Simulation UX is missing: {attribute}")
 
           if len(simulation.preview_controller.plots) != 6:
               raise SystemExit("Technical parameter mini-plots are incomplete")
@@ -183,12 +186,17 @@ jobs:
               raise SystemExit("Geographic map is not positioned beside the plots")
           if map_splitter.count() != 2:
               raise SystemExit("Map/plot splitter does not contain exactly two panels")
-          if simulation.map_widget.parentWidget() is not simulation.right_analysis_panel:
-              raise SystemExit("Geographic map is not in the right analysis panel")
-          if simulation.load_collective_plot.parentWidget() is not simulation.right_analysis_panel:
-              raise SystemExit("Load collective is not positioned below the geographic map")
-          if simulation.resistance_plot.parentWidget() is not simulation.speed_plot.parentWidget():
-              raise SystemExit("Resistance power is not the fourth stacked synchronized plot")
+
+          plot_stack = simulation.plot_stack_splitter
+          if plot_stack.orientation() != Qt.Orientation.Vertical or plot_stack.count() != 4:
+              raise SystemExit("Four analysis plots are not in a resizable vertical splitter")
+          right_stack = simulation.right_vertical_splitter
+          if right_stack.orientation() != Qt.Orientation.Vertical or right_stack.count() != 2:
+              raise SystemExit("Map and load collective are not in a resizable right-side splitter")
+          if right_stack.parentWidget() is not simulation.right_analysis_panel:
+              raise SystemExit("Right-side analysis splitter is outside its panel")
+          if simulation._parameter_pane is None or simulation._parameter_pane.maximumWidth() > 420:
+              raise SystemExit("Parameter pane is still too wide for the analysis layout")
 
           if simulation.dem_status_label is None:
               raise SystemExit("Automatic DEM status is missing")
@@ -216,6 +224,6 @@ jobs:
               if expected not in inventory:
                   raise SystemExit(f"Coverage status entry is missing: {expected}")
 
-          print("Unified Qt application uses comparison snapshots, cumulative load curves, mini-plots and lazy loading indicators")
+          print("Unified Qt application uses roomy resizable plots, cumulative load curves and lazy loading indicators")
           window.close()
           PY
