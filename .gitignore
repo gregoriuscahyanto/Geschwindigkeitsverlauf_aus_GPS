@@ -36,3 +36,5 @@ qt_route_selector/speed_profile_result.csv
 .idea/
 .DS_Store
 Thumbs.db
+
+*.code-workspace
