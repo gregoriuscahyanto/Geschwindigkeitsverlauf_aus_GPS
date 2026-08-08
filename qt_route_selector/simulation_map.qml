@@ -7,6 +7,11 @@ Rectangle {
     id: root
     color: "#e9ecef"
 
+    // Context properties can briefly become null while QQuickWidget tears down.
+    // Keep every binding safe so shutdown/reparenting never produces TypeErrors.
+    property var bridge: (typeof simulationMapBridge !== "undefined" && simulationMapBridge)
+        ? simulationMapBridge : null
+
     Plugin {
         id: osmPlugin
         name: "osm"
@@ -43,8 +48,11 @@ Rectangle {
         }
 
         function fitRoute() {
-            const path = simulationMapBridge.routePath
-            if (path.length < 2 || width < 10 || height < 10) {
+            if (!root.bridge) {
+                return
+            }
+            const path = root.bridge.routePath
+            if (!path || path.length < 2 || width < 10 || height < 10) {
                 return
             }
 
@@ -93,11 +101,11 @@ Rectangle {
             id: routeLine
             line.width: 5
             line.color: "#1769c2"
-            path: simulationMapBridge.routePath
+            path: root.bridge ? root.bridge.routePath : []
         }
 
         MapItemView {
-            model: simulationMapBridge.trafficLights
+            model: root.bridge ? root.bridge.trafficLights : []
             delegate: MapQuickItem {
                 required property var modelData
                 coordinate: modelData
@@ -116,11 +124,13 @@ Rectangle {
         }
 
         MapQuickItem {
-            visible: simulationMapBridge.positionValid
-            coordinate: QtPositioning.coordinate(
-                simulationMapBridge.currentLatitude,
-                simulationMapBridge.currentLongitude
-            )
+            visible: root.bridge ? root.bridge.positionValid : false
+            coordinate: root.bridge
+                ? QtPositioning.coordinate(
+                    root.bridge.currentLatitude,
+                    root.bridge.currentLongitude
+                )
+                : QtPositioning.coordinate(0.0, 0.0)
             anchorPoint.x: currentMarker.width / 2
             anchorPoint.y: currentMarker.height / 2
             sourceItem: Rectangle {
@@ -135,7 +145,8 @@ Rectangle {
         }
 
         Connections {
-            target: simulationMapBridge
+            target: root.bridge
+            ignoreUnknownSignals: true
             function onRoutePathChanged() {
                 fitTimer.restart()
             }
