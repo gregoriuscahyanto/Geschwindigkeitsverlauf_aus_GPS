@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 try:
-    from .integrated_speed_profile_v15 import IntegratedSpeedProfileWindow, main
+    from .integrated_speed_profile_v16 import IntegratedSpeedProfileWindow, main
 except ImportError:
-    from integrated_speed_profile_v15 import IntegratedSpeedProfileWindow, main
+    from integrated_speed_profile_v16 import IntegratedSpeedProfileWindow, main
 
 
 __all__ = ["IntegratedSpeedProfileWindow", "main"]
