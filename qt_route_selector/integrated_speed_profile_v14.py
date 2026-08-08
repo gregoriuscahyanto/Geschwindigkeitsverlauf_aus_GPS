@@ -34,6 +34,7 @@ class IntegratedSpeedProfileWindow(_V13Window):
         self.parameter_info_buttons: dict[str, QToolButton] = {}
         super().__init__(route_path)
         self._install_parameter_info_buttons()
+        self._install_elevation_smoothing_info_link()
 
     @staticmethod
     def _info_button(parent: QWidget, callback) -> QToolButton:
@@ -92,10 +93,22 @@ class IntegratedSpeedProfileWindow(_V13Window):
         if hasattr(self, "profile_combo"):
             self._wrap_special_field(self.profile_combo, "driver_profile")
 
-        # Visible elevation smoothing is a display/analysis parameter outside the
-        # simulation control dictionary.
-        if hasattr(self, "elevation_smoothing_spin"):
-            self._wrap_special_field(self.elevation_smoothing_spin, "elevation_smoothing")
+    def _install_elevation_smoothing_info_link(self) -> None:
+        # This control lives in the responsive route grid rather than a form.
+        # Keep the existing responsive reflow intact by adding a lightweight
+        # clickable (i) directly to its label instead of wrapping the grid cell.
+        label = getattr(self, "_smoothing_title_label", None)
+        if not isinstance(label, QLabel):
+            return
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setOpenExternalLinks(False)
+        label.setText("Höhenprofil-Glättung&nbsp;&nbsp;<a href='info' style='text-decoration:none'>(i)</a>")
+        label.setToolTip("Kurze technische Erklärung und Beispielwerte anzeigen")
+        try:
+            label.linkActivated.disconnect()
+        except RuntimeError:
+            pass
+        label.linkActivated.connect(lambda _link: self._show_parameter_help("elevation_smoothing"))
 
     def _wrap_special_field(self, widget: QWidget, key: str) -> None:
         if key in self.parameter_info_buttons:
