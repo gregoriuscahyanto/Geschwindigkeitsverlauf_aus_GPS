@@ -36,10 +36,6 @@ class IntegratedSpeedProfileWindow(_V8Window):
         self._style_analysis_toolbar()
         self._refresh_combined_axes()
 
-    # ------------------------------------------------------------------
-    # Parameter sidebar: use the complete available width instead of keeping
-    # the old content size calculated before the flattened settings existed.
-    # ------------------------------------------------------------------
     def _fit_parameter_sidebar(self) -> None:
         outer = self.centralWidget()
         pane = self._parameter_pane
@@ -87,8 +83,6 @@ class IntegratedSpeedProfileWindow(_V8Window):
                     widget.sizePolicy().verticalPolicy(),
                 )
 
-        # Technical preview plots must shrink/grow with the sidebar instead of
-        # preserving an old fixed width and being visually cut at the right edge.
         for plot in content.findChildren(pg.PlotWidget):
             plot.setMinimumWidth(0)
             plot.setMaximumWidth(16_777_215)
@@ -97,13 +91,22 @@ class IntegratedSpeedProfileWindow(_V8Window):
         content.updateGeometry()
         scroll.updateGeometry()
 
-    # ------------------------------------------------------------------
-    # One visual language for every control in the analysis toolbar.
-    # ------------------------------------------------------------------
     def _style_analysis_toolbar(self) -> None:
         toolbar = self.axis_combo.parentWidget()
         if toolbar is None:
             return
+
+        # Remove old per-widget styles first. Otherwise those styles win over
+        # the common toolbar stylesheet and produce mixed white/grey shapes.
+        for name in ("sidebar_toggle_button", "signals_button"):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setStyleSheet("")
+                if isinstance(widget, QToolButton):
+                    widget.setAutoRaise(False)
+        if hasattr(self, "sidebar_toggle_button"):
+            self.sidebar_toggle_button.setText("☰  Parameter")
+
         toolbar.setStyleSheet(
             "QComboBox, QPushButton, QToolButton {"
             "  min-height: 26px; padding: 3px 9px;"
@@ -121,18 +124,9 @@ class IntegratedSpeedProfileWindow(_V8Window):
             "}"
             "QComboBox::drop-down { border: 0px; width: 20px; }"
         )
-        if hasattr(self, "sidebar_toggle_button"):
-            self.sidebar_toggle_button.setAutoRaise(False)
-            self.sidebar_toggle_button.setText("☰  Parameter")
-        if hasattr(self, "signals_button"):
-            self.signals_button.setAutoRaise(False)
         if hasattr(self, "reset_views_button") and isinstance(self.reset_views_button, QPushButton):
             self.reset_views_button.setFlat(False)
 
-    # ------------------------------------------------------------------
-    # pyqtgraph compatibility. InfiniteLine does not accept y= in the version
-    # used on the Windows machine; pos + horizontal angle works across versions.
-    # ------------------------------------------------------------------
     def _add_zero_line(self, group: str) -> None:
         view = self._combined_views.get(group)
         if view is None:
@@ -147,9 +141,6 @@ class IntegratedSpeedProfileWindow(_V8Window):
         self._combined_aux_items.append((line, group))
 
     def _set_combined_axis_visibility(self, groups: set[str]) -> None:
-        # Explicitly update every axis after a signal/metric change. This is
-        # important when a previous redraw aborted: no stale axis visibility is
-        # allowed to survive into the next successful render.
         widths = {
             "speed": 64,
             "acceleration": 72,
@@ -206,8 +197,6 @@ class IntegratedSpeedProfileWindow(_V8Window):
 
     @staticmethod
     def _signal_definition(key: str):
-        # Keep this small mirror local to V9 to avoid importing private globals
-        # from V8 through two different package import paths.
         groups = {
             "simulated": "speed",
             "road_limit": "speed",
@@ -227,8 +216,6 @@ class IntegratedSpeedProfileWindow(_V8Window):
 
     def _update_combined_plot(self) -> None:
         super()._update_combined_plot()
-        # The parent now finishes without the InfiniteLine exception. Reassert
-        # axis visibility to make recovery from the old failed state immediate.
         if hasattr(self, "combined_plot"):
             self._refresh_combined_axes()
 
