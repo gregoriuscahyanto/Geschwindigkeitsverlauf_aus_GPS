@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QVBoxLayout, QWidget
+from PySide6.QtCore import QObject, Qt
+from PySide6.QtWidgets import (
+    QApplication,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QVBoxLayout,
+    QWidget,
+)
 
 try:
     from .complete_app_base import *  # noqa: F401,F403
@@ -14,13 +22,76 @@ except ImportError:
 
 
 class CompleteApplicationWindow(_BaseWindow):
-    """Complete app with visible feedback while heavy lazy tabs are initialized."""
+    """Complete app with a compact automatic-first routing workflow."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.setMinimumSize(920, 640)
         if hasattr(self, "route_container"):
             self.route_container.setMinimumSize(640, 420)
+        self._hide_manual_road_data_button()
+
+    def _build_route_page(self) -> QWidget:
+        """One compact status card; region and data selection are automatic."""
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(6, 6, 6, 6)
+        page_layout.setSpacing(6)
+
+        data_group = QGroupBox("Daten für diese Route")
+        data_group.setStyleSheet(
+            "QGroupBox { font-weight:600; border:1px solid palette(midlight); "
+            "border-radius:8px; margin-top:8px; padding-top:8px; }"
+        )
+        group_layout = QVBoxLayout(data_group)
+        group_layout.setContentsMargins(12, 12, 12, 9)
+        group_layout.setSpacing(6)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        region_caption = QLabel("Gebiet:")
+        region_caption.setStyleSheet("font-weight:600;")
+        header.addWidget(region_caption)
+        self.detected_region_label = QLabel("Noch nicht bestimmt – Start und Ziel anklicken")
+        self.detected_region_label.setStyleSheet("font-weight:600;")
+        self.detected_region_label.setWordWrap(True)
+        header.addWidget(self.detected_region_label, 1)
+        group_layout.addLayout(header)
+
+        self.data_status = QLabel(
+            "Start und Ziel setzen. Die App erkennt das passende Gebiet automatisch und verwendet "
+            "vorhandene Routing- und Höhendaten oder bereitet fehlende Daten selbst vor."
+        )
+        self.data_status.setWordWrap(True)
+        self.data_status.setStyleSheet("color:palette(mid);")
+        group_layout.addWidget(self.data_status)
+
+        self.data_progress = QProgressBar()
+        self.data_progress.setRange(0, 100)
+        self.data_progress.setValue(0)
+        self.data_progress.setTextVisible(False)
+        self.data_progress.setMaximumHeight(10)
+        group_layout.addWidget(self.data_progress)
+
+        self.route_data_group = data_group
+        page_layout.addWidget(data_group)
+        page_layout.addWidget(self.route_container, 1)
+        return page
+
+    def _hide_manual_road_data_button(self) -> None:
+        """Remove the old manual road-file action from the normal user workflow."""
+        route_window = getattr(self, "route_window", None)
+        if route_window is None:
+            return
+        for item in route_window.findChildren(QObject):
+            try:
+                text = item.property("text")
+            except Exception:
+                continue
+            if str(text or "").strip() == "Straßendaten wählen":
+                item.setProperty("visible", False)
+                item.setProperty("enabled", False)
+                self.manual_road_data_button_hidden = True
 
     @staticmethod
     def _loading_placeholder(title: str, detail: str) -> tuple[QWidget, QLabel, QProgressBar]:
@@ -43,7 +114,7 @@ class CompleteApplicationWindow(_BaseWindow):
     def _build_simulation_placeholder(self) -> QWidget:
         page, label, progress = self._loading_placeholder(
             "Geschwindigkeitsverlauf wird erst bei Bedarf geladen.",
-            "Beim Öffnen werden Simulation, technische Mini-Plots und Kartenansicht initialisiert.",
+            "Beim Öffnen werden Simulation, technische Vorschauen und Kartenansicht initialisiert.",
         )
         self.simulation_loading_label = label
         self.simulation_loading_bar = progress
