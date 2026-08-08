@@ -1,8 +1,145 @@
 # Geschwindigkeitsverlauf aus OSM-Routen
 
-Lokale Windows-Desktopanwendung zur Routenplanung mit OpenStreetMap-Daten und zur Simulation eines realistischen Geschwindigkeits-, Beschleunigungs-, Höhen- und Leistungsverlaufs.
+Lokale Windows-Desktopanwendung zur Routenplanung mit OpenStreetMap-Daten und zur Simulation eines Geschwindigkeits-, Beschleunigungs-, Höhen-, Leistungs- und Energieverlaufs entlang einer realen Straßenroute.
 
-Die Anwendung läuft vollständig in Python/PySide6. Es ist kein Java, Docker, lokaler Server oder Adminzugriff erforderlich.
+Die Anwendung verbindet **Geodaten, Routing und Fahrdynamik** in einem gemeinsamen Werkzeug. Aus einer vom Benutzer gewählten Route werden Straßeninformationen, Höhenverlauf und erkannte Verkehrselemente aufbereitet. Darauf aufbauend kann untersucht werden, wie unterschiedliche Fahrer-, Fahrzeug- und Umgebungsparameter den zeitlichen Fahrverlauf sowie die resultierenden Radleistungen und Energien beeinflussen.
+
+Die Anwendung läuft vollständig lokal in Python/PySide6. Es ist kein Java, Docker, lokaler Server oder Adminzugriff erforderlich.
+
+## Worum geht es bei dem Projekt?
+
+Eine reine GPS- oder OSM-Route beschreibt zunächst hauptsächlich **wo** ein Fahrzeug fährt. Für viele technische Fragestellungen ist jedoch zusätzlich interessant, **wie** diese Strecke voraussichtlich gefahren wird: Wo wird beschleunigt oder gebremst? Welche Geschwindigkeiten sind aufgrund von Straßenlimit, Kurven oder Verkehrselementen plausibel? Wie wirken Steigungen und Gefälle? Welche Radleistung wird dabei benötigt und wie verändert sich der Energiebedarf?
+
+Dieses Projekt bildet die Verbindung zwischen diesen beiden Ebenen:
+
+```text
+Start / Ziel / Wegpunkte
+        ↓
+OpenStreetMap-Routing
+        ↓
+Straßenattribute + Kurven + reale OSM-Ampeln
+        ↓
+Höhenprofil
+        ↓
+Fahrer- und Fahrzeugmodell
+        ↓
+Geschwindigkeit / Beschleunigung
+        ↓
+Radleistung / Energie / Lastkollektiv
+```
+
+Das Ergebnis ist kein einzelner statischer Fahrzyklus, sondern ein **parametrierbares Simulationswerkzeug**, mit dem dieselbe reale Route unter unterschiedlichen Annahmen betrachtet und verglichen werden kann.
+
+## Hintergrund und Motivation
+
+Für Simulationen von Fahrzeugen oder Antrieben werden häufig Geschwindigkeitsprofile benötigt. Standardisierte Fahrzyklen sind gut vergleichbar, bilden aber eine konkrete reale Straße mit ihren Kurven, Geschwindigkeitsbeschränkungen, Steigungen und Verkehrselementen nur eingeschränkt ab.
+
+Umgekehrt liefern Routing- und Kartendaten zwar eine reale Strecke, aber normalerweise noch keinen technisch nutzbaren Geschwindigkeits- und Lastverlauf.
+
+Die Anwendung soll diese Lücke schließen. Sie erzeugt aus frei gewählten OSM-Routen eine reproduzierbare Grundlage für Fahrverlaufs- und Lastsimulationen, ohne dass für jede Strecke zunächst eine reale Messfahrt erforderlich ist.
+
+Dabei liegt der Schwerpunkt bewusst auf einer **lokalen, nachvollziehbaren und veränderbaren Simulation**. Die verwendeten Fahrerprofile sind technische Modellszenarien. Sie sind keine empirischen Aussagen über reale Personengruppen.
+
+## Welche Problemstellungen kann die Anwendung adressieren?
+
+### 1. Von einer realen Route zu einem Geschwindigkeitsprofil
+
+Eine Liniengeometrie allein reicht für viele Fahrzeugberechnungen nicht aus. Die Anwendung kombiniert unter anderem Straßenlimits, Kurvengeometrie, Fahrerparameter, Beschleunigungs- und Bremsgrenzen sowie erkannte OSM-Verkehrssignale zu einem zeitabhängigen Fahrverlauf.
+
+Damit kann beispielsweise untersucht werden, wie sich eine reale Landstraßen-, Stadt- oder Autobahnroute dynamisch von einem standardisierten Fahrzyklus unterscheidet.
+
+### 2. Vergleich unterschiedlicher Fahrweisen
+
+Dieselbe Strecke kann mit unterschiedlichen Fahrerparametern simuliert werden. Dadurch lassen sich beispielsweise Auswirkungen von
+
+- gewünschter Reisegeschwindigkeit,
+- Beschleunigungs- und Bremsverhalten,
+- Kurvendynamik,
+- Geschwindigkeitsabweichungen,
+- Fahrerrauschen,
+- Verhalten nach Kurven oder
+- optionalen Überholmanövern
+
+auf Fahrzeit, Geschwindigkeit, Beschleunigung und Belastung vergleichen.
+
+Die mitgelieferten Presets dienen dabei als technische Ausgangspunkte und können vollständig angepasst werden.
+
+### 3. Einfluss von Fahrzeug- und Anhängerparametern
+
+Aus Geschwindigkeit, Beschleunigung und Höhenprofil wird die Radleistung aufgeteilt in Beiträge für
+
+- Beschleunigung,
+- Steigung bzw. Gefälle,
+- Rollwiderstand,
+- Luftwiderstand und
+- optional einen Anhänger.
+
+Damit können Parameterstudien durchgeführt werden, zum Beispiel zum Einfluss von Fahrzeugmasse, Luftwiderstand, Rollwiderstand oder Anhängerbetrieb.
+
+### 4. Abschätzung von Energiebedarf und Rekuperationspotenzial
+
+Durch Integration der Radleistung werden Antriebsenergie, negative Radarbeit bzw. ideales Rekuperationspotenzial und eine Nettoenergie berechnet.
+
+Das ermöglicht insbesondere **relative Vergleiche** zwischen Routen, Fahrweisen oder Fahrzeugparametern. Die aktuelle Energiebilanz ist bewusst ein Radleistungsmodell und noch kein vollständiges Batterie-, Motor- oder Wirkungsgradmodell.
+
+### 5. Analyse von Steigungen und topografischem Einfluss
+
+Das Höhenprofil wird automatisch aus Geländedaten ergänzt. Dadurch lässt sich sichtbar machen, welchen Einfluss Steigungen und Gefälle auf Geschwindigkeit, Radleistung und Energie haben.
+
+Das ist beispielsweise für Gebirgsstrecken oder längere Überlandfahrten relevant, bei denen reine 2D-Routingdaten die Belastung nur unvollständig beschreiben würden.
+
+### 6. Erzeugung von Lastkollektiven aus realen Strecken
+
+Aus dem simulierten Fahrverlauf kann ein kumuliertes Lastkollektiv der Radleistung erzeugt werden. Positive und negative Leistungsanteile werden getrennt dargestellt.
+
+Damit kann eine Route nicht nur als zeitlicher Verlauf betrachtet werden, sondern auch hinsichtlich der Häufigkeit und Dauer unterschiedlicher Leistungsniveaus.
+
+### 7. Reproduzierbare Simulation ohne Messfahrt
+
+Für frühe Entwicklungs- oder Konzeptphasen existiert häufig noch kein Messfahrzeug oder keine aufgezeichnete GPS-Fahrt. Mit der Anwendung können trotzdem reale Straßenverläufe als Grundlage für erste Simulationen verwendet werden.
+
+Eine reale Messung wird dadurch nicht grundsätzlich ersetzt. Das Werkzeug eignet sich vielmehr dazu, Varianten vorzubereiten, Hypothesen zu untersuchen und relevante Strecken oder Parameter für spätere Messungen einzugrenzen.
+
+### 8. Lokale Arbeit mit großen Geodaten
+
+OSM-, Routing- und Höhendaten werden lokal gecacht. Nach der Vorbereitung eines Gebiets können Routing und Simulation weitgehend mit den lokalen Daten durchgeführt werden.
+
+Das ist besonders nützlich, wenn große Datensätze nicht bei jedem Programmstart erneut geladen werden sollen oder wenn mit reproduzierbaren Datenständen gearbeitet werden soll.
+
+## Typische Anwendungsfälle
+
+Die Anwendung kann beispielsweise als Grundlage dienen für:
+
+- virtuelle Fahrzyklus-Erzeugung auf frei gewählten realen Routen,
+- Vergleich von Fahrer- und Fahrzeugparametern,
+- Abschätzung von Radleistungs- und Energieverläufen,
+- Untersuchung von Gebirgs-, Stadt-, Landstraßen- und Autobahnstrecken,
+- Vorauswahl interessanter Strecken für reale Messfahrten,
+- Parameterstudien für Fahrzeug- oder Anhängerkonzepte,
+- Erzeugung von Lastkollektiven für nachgelagerte Berechnungen,
+- Plausibilitäts- und Sensitivitätsanalysen sowie
+- Lehre, Forschung und prototypische Entwicklungsarbeiten rund um Fahrzeug-, Routing- und Geodaten.
+
+## Was die Anwendung bewusst nicht ist
+
+Die Anwendung ist ein technisches Simulations- und Analysewerkzeug und kein sicherheitskritisches Navigationssystem.
+
+Sie berücksichtigt derzeit insbesondere **keine Live-Verkehrslage, keine aktuellen Straßensperrungen und keine garantierte reale Ampelphase**. Ampelpositionen werden ausschließlich aus tatsächlich erkannten OSM-Verkehrssignalen übernommen; es werden keine künstlichen Ampeln erzeugt.
+
+Auch die Energieberechnung ist keine vollständige Fahrzeugverbrauchssimulation: Wirkungsgradkennfelder von Motor, Getriebe, Wechselrichter oder Batterie, Nebenverbraucher, thermische Effekte sowie Rekuperationsgrenzen sind im aktuellen Grundmodell nicht vollständig enthalten.
+
+Das verwendete Höhenmodell beschreibt die Geländeoberfläche. Dadurch können Tunnel und Brücken lokal ein falsches Fahrbahnhöhenniveau erhalten. Ergebnisse auf entsprechenden Strecken müssen daher mit dieser Einschränkung interpretiert werden.
+
+## Typischer Workflow
+
+1. Start, Ziel und optional Zwischenpunkte auf der Karte setzen.
+2. Die Anwendung erkennt automatisch das passende OSM-Datengebiet.
+3. Vorhandene Routingdaten werden verwendet; fehlende Daten werden bei Bedarf vorbereitet.
+4. Die Route wird lokal berechnet.
+5. Benötigte Höhendaten werden automatisch ergänzt.
+6. Im Simulations-Tab Fahrer- und Fahrzeugparameter wählen oder verändern.
+7. Geschwindigkeits-, Beschleunigungs-, Höhen-, Leistungs- und Energieverläufe analysieren.
+8. Optional Varianten vergleichen, Lastkollektive betrachten und Ergebnisse exportieren.
 
 ## Schnellstart unter Windows / VS Code
 
