@@ -6,7 +6,7 @@ import unittest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QFrame, QTextBrowser
 
-from qt_route_selector.integrated_speed_profile_v15 import IntegratedSpeedProfileWindow
+from qt_route_selector.integrated_speed_profile_v16 import IntegratedSpeedProfileWindow
 
 
 class ParameterHelpPopoverTests(unittest.TestCase):
@@ -38,6 +38,9 @@ class ParameterHelpPopoverTests(unittest.TestCase):
             text = browser.toPlainText()
             for expected in ("Was ist das?", "Einfluss", "Beispielwerte", "Aktuell"):
                 self.assertIn(expected, text)
+
+            # V16 keeps the QML bridge alive until the map widget itself is torn down.
+            self.assertIs(window.map_bridge.parent(), window.map_widget)
 
             # A second click on the same (i) toggles the lightweight help off.
             button.click()
