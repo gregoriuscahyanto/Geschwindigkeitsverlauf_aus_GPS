@@ -2,27 +2,45 @@
 
 Lokale Windows-Desktopanwendung zur Routenplanung mit OpenStreetMap-Daten und zur Simulation eines realistischen Geschwindigkeits-, Beschleunigungs-, Höhen- und Leistungsverlaufs.
 
-Die Anwendung läuft vollständig in Python/PySide6. Es ist kein Java, Docker oder lokaler Server erforderlich.
+Die Anwendung läuft vollständig in Python/PySide6. Es ist kein Java, Docker, lokaler Server oder Adminzugriff erforderlich.
 
-## Schnellstart unter Windows
+## Schnellstart unter Windows / VS Code
 
-Empfohlen wird Python 3.11 (64 Bit). Für einen sauberen Checkout legt das Setup die virtuelle Umgebung und alle Laufzeitdaten **außerhalb des Repositories** unter `%LOCALAPPDATA%\GPS-Routenplaner` ab.
+Empfohlen wird Python 3.11 (64 Bit). Das Setup erzeugt eine normale `.venv` direkt im Repository. Dadurch erkennt VS Code die Projektumgebung automatisch bzw. kann sie über **Python: Select Interpreter** auswählen.
 
 ```powershell
 .\scripts\setup_windows.ps1
 ```
 
-Danach starten:
+Danach entweder ein neues VS-Code-Terminal öffnen oder die Umgebung manuell aktivieren:
 
 ```powershell
-& "$env:LOCALAPPDATA\GPS-Routenplaner\venv\Scripts\python.exe" -m qt_route_selector
+.\.venv\Scripts\Activate.ps1
 ```
 
-Alternativ kann eine bereits vorhandene Python-3.11-Umgebung verwendet werden:
+Falls PowerShell die Aktivierung nur wegen der Execution Policy blockiert, reicht für das aktuelle Terminal:
 
 ```powershell
-python -m pip install -r requirements.txt
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+.\.venv\Scripts\Activate.ps1
+```
+
+Anschließend startet die Anwendung einfach mit:
+
+```powershell
 python -m qt_route_selector
+```
+
+Ohne Aktivierung kann sie ebenfalls direkt über die Projektumgebung gestartet werden:
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m qt_route_selector
+```
+
+Das Setup kann Installation und Start auch zusammen ausführen:
+
+```powershell
+.\scripts\setup_windows.ps1 -Run
 ```
 
 ## Anwendung
@@ -41,43 +59,52 @@ Ampelstopps stammen ausschließlich aus tatsächlich erkannten OSM-Verkehrssigna
 
 Die Radleistung berücksichtigt Beschleunigung, Steigung, Rollwiderstand, Luftwiderstand und optional den Anhänger. Angezeigt werden Antriebsenergie, ideale Rekuperationsenergie und Nettoenergie. Die aktuelle Energieberechnung nimmt für die Rekuperation 100 % Wirkungsgrad sowie keine Leistungs- oder Kapazitätsbegrenzung an.
 
-## Laufzeitdaten
+## Trennung von Entwicklungsumgebung und Laufzeitdaten
 
-Quellcode und Laufzeitdaten sind bewusst getrennt. Standardmäßig verwendet die Anwendung unter Windows:
+Die lokale Python-Umgebung gehört zum Entwicklungs-Checkout und liegt hier:
+
+```text
+<Repository>\.venv\
+```
+
+Sie ist per `.gitignore` ausgeschlossen und wird nicht committed.
+
+Große bzw. generierte Anwendungsdaten bleiben bewusst **außerhalb** des Repositories. Standardmäßig verwendet die Anwendung unter Windows:
 
 ```text
 %LOCALAPPDATA%\GPS-Routenplaner\
   data\      OSM-PBF, POLY, Routing-GPKG und Höhenmodelle
   state\     route_result.json und selected_region.json
-  exports\   reservierter Standardordner für Exporte
-  venv\      von scripts/setup_windows.ps1 erzeugte Python-Umgebung
+  exports\   Standardordner für Exporte
 ```
 
-Der Speicherort kann für Tests oder besondere Installationen über `GPS_ROUTENPLANER_HOME` überschrieben werden.
+Der Runtime-Speicherort kann für Tests oder besondere Installationen über `GPS_ROUTENPLANER_HOME` überschrieben werden.
 
 Für Österreich wird ein landesweites DGM verwendet. Außerhalb Österreichs werden routenbezogen Copernicus-GLO-30-Kacheln gecacht. Ein Terrain-DEM bildet Tunnel- und Brückenfahrbahnen nicht exakt ab; das ist bei starken Höhenunterschieden zu berücksichtigen.
 
 ## Bestehenden Checkout einmalig bereinigen
 
-Ein `git pull` löscht ignorierte lokale Ordner wie `.venv`, `data` oder `results` nicht. Deshalb gibt es für ältere Arbeitskopien ein bewusst konservatives Cleanup-Skript. Es migriert ein vorhandenes `data`-Verzeichnis nach `%LOCALAPPDATA%\GPS-Routenplaner\data`, verschiebt Route-JSONs nach `state` und archiviert alte Prototypordner in einem datierten Backup **neben** dem Repository statt sie ungefragt zu löschen.
+Ein `git pull` löscht ignorierte lokale Ordner wie `data` oder alte Prototype-Verzeichnisse nicht. Das Cleanup-Skript migriert ein vorhandenes `data`-Verzeichnis nach `%LOCALAPPDATA%\GPS-Routenplaner\data`, verschiebt Route-JSONs nach `state` und archiviert alte Prototype-Ordner in einem datierten Backup **neben** dem Repository statt sie ungefragt zu löschen.
 
-Zuerst die externe Umgebung anlegen, danach bereinigen:
+Die `.venv` wird dabei absichtlich nicht verändert.
 
-```powershell
-.\scripts\setup_windows.ps1
-.\scripts\cleanup_legacy_workspace.ps1 -RemoveVenv
-```
-
-Vorab prüfen, ohne Dateien zu verschieben:
+Vorab prüfen:
 
 ```powershell
-.\scripts\cleanup_legacy_workspace.ps1 -RemoveVenv -WhatIf
+.\scripts\cleanup_legacy_workspace.ps1 -WhatIf
 ```
 
-Nach der einmaligen Bereinigung sieht der Projektroot im Wesentlichen so aus:
+Danach ausführen:
+
+```powershell
+.\scripts\cleanup_legacy_workspace.ps1
+```
+
+Ein typischer lokaler Projektroot sieht danach so aus:
 
 ```text
 .github/
+.venv/                    # lokal, von Git ignoriert
 qt_route_selector/
 scripts/
 .gitattributes
@@ -85,6 +112,16 @@ scripts/
 README.md
 requirements.txt
 ```
+
+## VS-Code-Interpreter
+
+Wenn VS Code nicht automatisch `.venv` auswählt:
+
+1. `Ctrl+Shift+P`
+2. **Python: Select Interpreter**
+3. `<Repository>\.venv\Scripts\python.exe` auswählen
+
+Danach öffnet ein neues VS-Code-Terminal normalerweise direkt mit `(.venv)`.
 
 ## Projektstruktur
 
@@ -108,7 +145,13 @@ qt_route_selector/
 
 Die Dateien unter `_internal/` sind Implementierungsdetails. Externer Code sollte nur die öffentlichen Module unter `qt_route_selector` verwenden.
 
+## Abhängigkeiten
+
+`requirements.txt` enthält die für den aktuellen Stand getesteten Python-Versionen. `scripts/setup_windows.ps1` installiert sie automatisch in `.venv` und prüft danach zentrale Laufzeitmodule wie PySide6, PyQtGraph, NumPy, GeoPandas und Rasterio.
+
 ## Tests
+
+Mit aktivierter `.venv`:
 
 ```powershell
 python -m unittest discover -s qt_route_selector\tests -v
@@ -118,4 +161,4 @@ GitHub Actions installiert `requirements.txt`, kompiliert das Paket und führt d
 
 ## Generierte Dateien
 
-Laufzeitdaten gehören nicht in Git. Die `.gitignore` enthält zusätzlich die Verzeichnisnamen des alten Prototyp-Workspaces, damit sie bei bestehenden Checkouts nicht versehentlich erneut committed werden.
+Laufzeitdaten gehören nicht in Git. Die `.gitignore` schließt `.venv`, Runtime-Ausgaben, Geodaten und die Verzeichnisnamen des alten Prototype-Workspaces aus, damit sie bei bestehenden Checkouts nicht versehentlich committed werden.
