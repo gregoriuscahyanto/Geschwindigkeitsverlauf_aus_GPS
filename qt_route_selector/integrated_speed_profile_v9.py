@@ -78,10 +78,14 @@ class IntegratedSpeedProfileWindow(_V8Window):
             if grid.columnCount() >= 2:
                 grid.setColumnStretch(grid.columnCount() - 1, 1)
 
-        for widget in content.findChildren((QComboBox, QAbstractSpinBox, QLineEdit)):
-            widget.setMinimumWidth(0)
-            widget.setMaximumWidth(16_777_215)
-            widget.setSizePolicy(QSizePolicy.Policy.Expanding, widget.sizePolicy().verticalPolicy())
+        for widget_type in (QComboBox, QAbstractSpinBox, QLineEdit):
+            for widget in content.findChildren(widget_type):
+                widget.setMinimumWidth(0)
+                widget.setMaximumWidth(16_777_215)
+                widget.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    widget.sizePolicy().verticalPolicy(),
+                )
 
         # Technical preview plots must shrink/grow with the sidebar instead of
         # preserving an old fixed width and being visually cut at the right edge.
@@ -182,7 +186,13 @@ class IntegratedSpeedProfileWindow(_V8Window):
             return
         if self._comparison_configs and self._comparison_results:
             metric = str(self.comparison_metric_combo.currentData())
-            group = "power" if metric == "power" else "acceleration" if metric == "acceleration" else "speed"
+            group = (
+                "power"
+                if metric == "power"
+                else "acceleration"
+                if metric == "acceleration"
+                else "speed"
+            )
             self._set_combined_axis_visibility({group})
             return
         groups: set[str] = set()
