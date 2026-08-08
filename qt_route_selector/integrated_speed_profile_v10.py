@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QToolButton,
+    QVBoxLayout,
 )
 
 try:
@@ -28,6 +29,7 @@ except ImportError:
 
 
 _SIMPLE_SIGNALS = {"simulated", "road_limit", "elevation"}
+_ADVANCED_PARAMETER_GROUPS = {"Ampeln", "Überholen", "Rauschen"}
 
 
 class IntegratedSpeedProfileWindow(_V9Window):
@@ -46,6 +48,7 @@ class IntegratedSpeedProfileWindow(_V9Window):
         self._configure_simple_default_signals()
         self._make_parameter_content_responsive()
         self._simplify_parameter_copy()
+        self._install_advanced_parameter_disclosure()
         self._style_parameter_cards()
         self._responsive_ready = True
         self._apply_responsive_layout(force=True)
@@ -148,6 +151,65 @@ class IntegratedSpeedProfileWindow(_V9Window):
             elif text == "CSV + JSON exportieren":
                 button.setText("Exportieren …")
                 button.setToolTip("Simulation als CSV und JSON exportieren")
+
+    def _install_advanced_parameter_disclosure(self) -> None:
+        groups = {
+            group.title(): group
+            for group in self.findChildren(QGroupBox)
+            if group.title() in _ADVANCED_PARAMETER_GROUPS
+        }
+        if not groups:
+            return
+
+        anchor = next(
+            (
+                group
+                for group in self.findChildren(QGroupBox)
+                if group.title() in {"Kurven", "Fahrer", "Vergleich"}
+            ),
+            None,
+        )
+        parent = anchor.parentWidget() if anchor is not None else None
+        layout = parent.layout() if parent is not None else None
+        if not isinstance(layout, QVBoxLayout):
+            return
+
+        button = QToolButton()
+        button.setText("Weitere Parameter")
+        button.setCheckable(True)
+        button.setChecked(False)
+        button.setArrowType(Qt.ArrowType.RightArrow)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.setToolTip("Ampeln, Überholen und Fahrerrauschen ein- oder ausblenden")
+        button.setStyleSheet(
+            "QToolButton {"
+            "  text-align: left; padding: 6px 8px; border: 1px solid palette(midlight);"
+            "  border-radius: 8px; background: palette(base); font-weight: 600;"
+            "}"
+            "QToolButton:hover { border-color: palette(highlight); background: palette(alternate-base); }"
+        )
+        button.toggled.connect(self._set_advanced_parameters_visible)
+
+        first_indexes = [layout.indexOf(group) for group in groups.values() if layout.indexOf(group) >= 0]
+        insert_at = min(first_indexes) if first_indexes else layout.count()
+        layout.insertWidget(insert_at, button)
+        self.advanced_parameters_button = button
+        self._advanced_parameter_groups = list(groups.values())
+        self._set_advanced_parameters_visible(False)
+
+    def _set_advanced_parameters_visible(self, visible: bool) -> None:
+        for group in getattr(self, "_advanced_parameter_groups", []):
+            group.setVisible(bool(visible))
+        button = getattr(self, "advanced_parameters_button", None)
+        if isinstance(button, QToolButton):
+            old = button.blockSignals(True)
+            button.setChecked(bool(visible))
+            button.setArrowType(
+                Qt.ArrowType.DownArrow if visible else Qt.ArrowType.RightArrow
+            )
+            button.blockSignals(old)
+        if hasattr(self, "parameter_scroll_area"):
+            self.parameter_scroll_area.widget().updateGeometry()
 
     def _style_parameter_cards(self) -> None:
         for group in self.findChildren(QGroupBox):
