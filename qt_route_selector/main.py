@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -428,6 +429,29 @@ class RouteSelector(QObject):
             "roads_file": self._roads_file,
         }
 
+    def _file_metadata_payload(self) -> dict[str, Any]:
+        now = datetime.now().astimezone()
+        start = self.points[0] if self.points else None
+        end = self.points[-1] if len(self.points) >= 2 else None
+        return {
+            "created_at": now.isoformat(timespec="seconds"),
+            "created_date": now.date().isoformat(),
+            "created_time": now.strftime("%H:%M:%S"),
+            "timezone": now.tzname() or "local",
+            "start_gps": (
+                {"latitude": float(start[0]), "longitude": float(start[1])}
+                if start is not None
+                else None
+            ),
+            "end_gps": (
+                {"latitude": float(end[0]), "longitude": float(end[1])}
+                if end is not None
+                else None
+            ),
+            "waypoint_count": max(0, len(self.points) - 2),
+            "routing_profile": self._routing_profile,
+        }
+
     def _update_point_models(self) -> None:
         self.route_point_model.set_points(self.points)
         self.pointCountChanged.emit()
@@ -469,8 +493,12 @@ class RouteSelector(QObject):
         self._clear_route_display()
         self.current_bbox = self.bbox_for_points(self.points) if len(self.points) >= 2 else None
         if len(self.points) >= 2:
+            selection_output = {
+                "metadata": self._file_metadata_payload(),
+                **self._selection_payload(),
+            }
             Path("selected_region.json").write_text(
-                json.dumps(self._selection_payload(), indent=2, ensure_ascii=False),
+                json.dumps(selection_output, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
             waypoint_count = max(0, len(self.points) - 2)
@@ -661,7 +689,11 @@ class RouteSelector(QObject):
 
     @Slot("QVariantMap")
     def _route_finished(self, result: dict[str, Any]) -> None:
-        output = {"selection": self._selection_payload(), **result}
+        output = {
+            "metadata": self._file_metadata_payload(),
+            "selection": self._selection_payload(),
+            **result,
+        }
         Path("route_result.json").write_text(
             json.dumps(output, indent=2, ensure_ascii=False),
             encoding="utf-8",
