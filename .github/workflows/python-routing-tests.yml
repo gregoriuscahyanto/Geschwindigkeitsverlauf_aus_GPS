@@ -143,7 +143,13 @@ jobs:
               "preview_controller",
               "plot_stack_splitter",
               "right_vertical_splitter",
-              "toggle_parameters_button",
+              "combined_plot",
+              "combined_container",
+              "plot_mode_combo",
+              "signals_button",
+              "signal_actions",
+              "sidebar_toggle_button",
+              "energy_header_label",
           ):
               if not hasattr(simulation, attribute) or getattr(simulation, attribute) is None:
                   raise SystemExit(f"Simulation UX is missing: {attribute}")
@@ -156,6 +162,38 @@ jobs:
               for button in simulation.findChildren(QPushButton)
           ):
               raise SystemExit("Manual DEM buttons are still visible in the simulation tab")
+
+          if simulation.plot_mode_combo.currentData() != "combined":
+              raise SystemExit("Combined analysis plot is not the default mode")
+          if simulation.combined_container.isHidden():
+              raise SystemExit("Combined analysis plot is explicitly hidden by default")
+          if not simulation.plot_stack_splitter.isHidden():
+              raise SystemExit("Legacy four-plot stack is still visible in combined mode")
+          if set(simulation._combined_views) != {"speed", "acceleration", "elevation", "power"}:
+              raise SystemExit("Combined analysis plot does not expose all four y-axis groups")
+          if sum(action.isChecked() for action in simulation.signal_actions.values()) < 4:
+              raise SystemExit("Combined analysis plot has too few useful default signals")
+          plot_root = simulation.centralWidget().widget(1)
+          if simulation.energy_header_label.parentWidget() is not plot_root:
+              raise SystemExit("Energy balance was not moved into the compact top summary area")
+          if not simulation.sidebar_toggle_button.isChecked():
+              raise SystemExit("Modern parameter sidebar toggle does not reflect the visible pane")
+
+          simulation.sidebar_toggle_button.setChecked(False)
+          app.processEvents()
+          if not simulation._parameter_pane.isHidden():
+              raise SystemExit("Modern parameter sidebar cannot be collapsed")
+          simulation.sidebar_toggle_button.setChecked(True)
+          app.processEvents()
+          if simulation._parameter_pane.isHidden():
+              raise SystemExit("Modern parameter sidebar cannot be reopened")
+
+          simulation.plot_mode_combo.setCurrentIndex(1)
+          app.processEvents()
+          if simulation.plot_stack_splitter.isHidden() or not simulation.combined_container.isHidden():
+              raise SystemExit("Optional four-plot fallback mode cannot be activated")
+          simulation.plot_mode_combo.setCurrentIndex(0)
+          app.processEvents()
 
           simulation.compare_name_edit.setText("Baseline")
           simulation._save_comparison_config()
@@ -189,7 +227,7 @@ jobs:
 
           plot_stack = simulation.plot_stack_splitter
           if plot_stack.orientation() != Qt.Orientation.Vertical or plot_stack.count() != 4:
-              raise SystemExit("Four analysis plots are not in a resizable vertical splitter")
+              raise SystemExit("Four analysis plots are not retained as an optional fallback")
           right_stack = simulation.right_vertical_splitter
           if right_stack.orientation() != Qt.Orientation.Vertical or right_stack.count() != 2:
               raise SystemExit("Map and load collective are not in a resizable right-side splitter")
@@ -224,6 +262,6 @@ jobs:
               if expected not in inventory:
                   raise SystemExit(f"Coverage status entry is missing: {expected}")
 
-          print("Unified Qt application uses roomy resizable plots, cumulative load curves and lazy loading indicators")
+          print("Unified Qt application uses a combined multi-axis plot, modern sidebar, compact energy header and lazy loading indicators")
           window.close()
           PY
