@@ -18,17 +18,19 @@ $RuntimeState = Join-Path $RuntimeRoot "state"
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $BackupRoot = Join-Path $RepoParent ("Geschwindigkeitsverlauf_legacy_" + $Stamp)
 
-New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
-New-Item -ItemType Directory -Force -Path $RuntimeState | Out-Null
+if (-not $WhatIfPreference) {
+    New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
+    New-Item -ItemType Directory -Force -Path $RuntimeState | Out-Null
+}
 
 function Move-ToBackup([string]$Path) {
     if (-not (Test-Path $Path)) { return }
-    if (-not (Test-Path $BackupRoot)) {
-        New-Item -ItemType Directory -Force -Path $BackupRoot | Out-Null
-    }
     $Name = Split-Path -Leaf $Path
     $Destination = Join-Path $BackupRoot $Name
     if ($PSCmdlet.ShouldProcess($Path, "nach $Destination verschieben")) {
+        if (-not (Test-Path $BackupRoot)) {
+            New-Item -ItemType Directory -Force -Path $BackupRoot | Out-Null
+        }
         Move-Item -Path $Path -Destination $Destination
     }
 }
@@ -39,6 +41,7 @@ $LegacyData = Join-Path $RepoRoot "data"
 if (Test-Path $LegacyData) {
     if (-not (Test-Path $RuntimeData)) {
         if ($PSCmdlet.ShouldProcess($LegacyData, "nach $RuntimeData verschieben")) {
+            New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
             Move-Item -Path $LegacyData -Destination $RuntimeData
         }
     } elseif ((Get-ChildItem -Force $RuntimeData -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0) {
@@ -58,6 +61,7 @@ foreach ($Name in @("route_result.json", "selected_region.json")) {
     $Destination = Join-Path $RuntimeState $Name
     if (-not (Test-Path $Destination)) {
         if ($PSCmdlet.ShouldProcess($Source, "nach $Destination verschieben")) {
+            New-Item -ItemType Directory -Force -Path $RuntimeState | Out-Null
             Move-Item -Path $Source -Destination $Destination
         }
     } else {
@@ -85,9 +89,12 @@ $LegacyVenv = Join-Path $RepoRoot ".venv"
 if ($RemoveVenv -and (Test-Path $LegacyVenv)) {
     $ExternalPython = Join-Path $RuntimeRoot "venv\Scripts\python.exe"
     if (-not (Test-Path $ExternalPython)) {
-        throw "Externe Python-Umgebung fehlt. Zuerst .\scripts\setup_windows.ps1 ausführen."
-    }
-    if ($PSCmdlet.ShouldProcess($LegacyVenv, "alte Repo-.venv löschen")) {
+        if ($WhatIfPreference) {
+            Write-Warning "Externe Python-Umgebung ist noch nicht vorhanden; vor dem echten Cleanup zuerst setup_windows.ps1 ausführen."
+        } else {
+            throw "Externe Python-Umgebung fehlt. Zuerst .\scripts\setup_windows.ps1 ausführen."
+        }
+    } elseif ($PSCmdlet.ShouldProcess($LegacyVenv, "alte Repo-.venv löschen")) {
         Remove-Item -Recurse -Force $LegacyVenv
     }
 } elseif (Test-Path $LegacyVenv) {
