@@ -150,6 +150,7 @@ jobs:
               "signal_actions",
               "sidebar_toggle_button",
               "energy_header_label",
+              "parameter_scroll_area",
           ):
               if not hasattr(simulation, attribute) or getattr(simulation, attribute) is None:
                   raise SystemExit(f"Simulation UX is missing: {attribute}")
@@ -171,8 +172,11 @@ jobs:
               raise SystemExit("Legacy four-plot stack is still visible in combined mode")
           if set(simulation._combined_views) != {"speed", "acceleration", "elevation", "power"}:
               raise SystemExit("Combined analysis plot does not expose all four y-axis groups")
-          if sum(action.isChecked() for action in simulation.signal_actions.values()) < 4:
-              raise SystemExit("Combined analysis plot has too few useful default signals")
+          active_signals = {
+              key for key, action in simulation.signal_actions.items() if action.isChecked()
+          }
+          if active_signals != {"simulated", "road_limit", "elevation"}:
+              raise SystemExit("Simple default signal set is not active")
           plot_root = simulation.centralWidget().widget(1)
           if simulation.energy_header_label.parentWidget() is not plot_root:
               raise SystemExit("Energy balance was not moved into the compact top summary area")
@@ -221,7 +225,7 @@ jobs:
           if not isinstance(map_splitter, QSplitter):
               raise SystemExit("Map/plot splitter is missing")
           if map_splitter.orientation() != Qt.Orientation.Horizontal:
-              raise SystemExit("Geographic map is not positioned beside the plots")
+              raise SystemExit("Medium/large screen does not place map beside the plot")
           if map_splitter.count() != 2:
               raise SystemExit("Map/plot splitter does not contain exactly two panels")
 
@@ -235,10 +239,10 @@ jobs:
               raise SystemExit("Right-side analysis splitter is outside its panel")
           if simulation._parameter_pane is None:
               raise SystemExit("Parameter pane is missing")
-          if simulation._parameter_pane.minimumWidth() < 450:
-              raise SystemExit("Parameter pane is too narrow and can clip controls")
-          if simulation._parameter_pane.maximumWidth() < 520:
-              raise SystemExit("Parameter pane cannot expand enough for parameter controls")
+          if simulation._parameter_pane.minimumWidth() != 0:
+              raise SystemExit("Parameter pane still has a fixed minimum width")
+          if simulation._parameter_pane.maximumWidth() < 1_000_000:
+              raise SystemExit("Parameter pane still has a restrictive maximum width")
 
           if simulation.dem_status_label is None:
               raise SystemExit("Automatic DEM status is missing")
@@ -266,6 +270,6 @@ jobs:
               if expected not in inventory:
                   raise SystemExit(f"Coverage status entry is missing: {expected}")
 
-          print("Unified Qt application uses robust multi-axis plotting, unclipped parameters and lazy loading indicators")
+          print("Unified Qt application uses responsive ratios, simple defaults and adaptive map stacking")
           window.close()
           PY
