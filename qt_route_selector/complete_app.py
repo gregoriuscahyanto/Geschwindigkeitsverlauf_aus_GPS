@@ -16,6 +16,12 @@ except ImportError:
 class CompleteApplicationWindow(_BaseWindow):
     """Complete app with visible feedback while heavy lazy tabs are initialized."""
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.setMinimumSize(920, 640)
+        if hasattr(self, "route_container"):
+            self.route_container.setMinimumSize(640, 420)
+
     @staticmethod
     def _loading_placeholder(title: str, detail: str) -> tuple[QWidget, QLabel, QProgressBar]:
         page = QWidget()
