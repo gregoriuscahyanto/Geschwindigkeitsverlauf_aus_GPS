@@ -3,10 +3,11 @@ name: Python routing tests
 on:
   push:
     branches:
-      - feature/qt-route-selector
+      - main
   pull_request:
     paths:
       - "qt_route_selector/**"
+      - "scripts/**"
       - "requirements.txt"
       - ".github/workflows/python-routing-tests.yml"
 
@@ -42,3 +43,29 @@ jobs:
 
       - name: Run tests
         run: python -m unittest discover -s qt_route_selector/tests -v
+
+  offline-windows-setup:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 x64
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: "x64"
+          cache: pip
+
+      - name: Build offline wheelhouse
+        shell: powershell
+        run: .\scripts\build_offline_dependencies.ps1
+
+      - name: Install from wheelhouse
+        shell: powershell
+        run: .\scripts\setup_windows.ps1
+
+      - name: Verify local environment
+        shell: powershell
+        run: .\.venv\Scripts\python.exe -c "import PySide6, pyqtgraph, numpy, pandas, geopandas, rasterio; print('Offline Windows environment OK')"
