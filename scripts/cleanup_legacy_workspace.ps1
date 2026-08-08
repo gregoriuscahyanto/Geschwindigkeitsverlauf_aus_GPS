@@ -1,7 +1,5 @@
 [CmdletBinding(SupportsShouldProcess=$true)]
-param(
-    [switch]$RemoveVenv
-)
+param()
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -36,7 +34,7 @@ function Move-ToBackup([string]$Path) {
 }
 
 # Preserve already downloaded OSM/DEM data by moving the complete legacy data
-# directory into the new per-user runtime location when that location is empty.
+# directory into the per-user runtime location when that location is empty.
 $LegacyData = Join-Path $RepoRoot "data"
 if (Test-Path $LegacyData) {
     if (-not (Test-Path $RuntimeData)) {
@@ -69,9 +67,8 @@ foreach ($Name in @("route_result.json", "selected_region.json")) {
     }
 }
 
-# These directories belong to the retired prototype workflow. They are not
-# deleted: existing local content is moved next to the repository as a dated
-# backup so nothing valuable is lost.
+# Retired prototype directories are archived instead of deleted. The local
+# .venv is intentionally NOT touched: it is the standard VS Code environment.
 foreach ($Name in @(
     "augmented",
     "database",
@@ -85,25 +82,10 @@ foreach ($Name in @(
     Move-ToBackup (Join-Path $RepoRoot $Name)
 }
 
-$LegacyVenv = Join-Path $RepoRoot ".venv"
-if ($RemoveVenv -and (Test-Path $LegacyVenv)) {
-    $ExternalPython = Join-Path $RuntimeRoot "venv\Scripts\python.exe"
-    if (-not (Test-Path $ExternalPython)) {
-        if ($WhatIfPreference) {
-            Write-Warning "Externe Python-Umgebung ist noch nicht vorhanden; vor dem echten Cleanup zuerst setup_windows.ps1 ausführen."
-        } else {
-            throw "Externe Python-Umgebung fehlt. Zuerst .\scripts\setup_windows.ps1 ausführen."
-        }
-    } elseif ($PSCmdlet.ShouldProcess($LegacyVenv, "alte Repo-.venv löschen")) {
-        Remove-Item -Recurse -Force $LegacyVenv
-    }
-} elseif (Test-Path $LegacyVenv) {
-    Write-Host "Hinweis: .venv bleibt erhalten. Für einen komplett sauberen Root nach setup_windows.ps1 erneut mit -RemoveVenv ausführen."
-}
-
 Write-Host ""
 Write-Host "Workspace-Bereinigung abgeschlossen."
-Write-Host "Runtime: $RuntimeRoot"
+Write-Host "Runtime-Daten: $RuntimeRoot"
+Write-Host "Lokale Python-Umgebung: $(Join-Path $RepoRoot '.venv') (bleibt erhalten)"
 if (Test-Path $BackupRoot) {
     Write-Host "Legacy-Backup: $BackupRoot"
 }
