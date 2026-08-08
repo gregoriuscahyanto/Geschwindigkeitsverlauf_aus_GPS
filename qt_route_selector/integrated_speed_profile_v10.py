@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QAbstractSpinBox,
     QComboBox,
-    QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QGroupBox,
@@ -18,10 +17,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QSplitter,
     QToolButton,
-    QWidget,
 )
 
 try:
@@ -53,10 +50,6 @@ class IntegratedSpeedProfileWindow(_V9Window):
         self._responsive_ready = True
         self._apply_responsive_layout(force=True)
 
-    # ------------------------------------------------------------------
-    # Progressive disclosure: start with the three signals that answer the
-    # most common questions. Everything else remains one click away in Signale.
-    # ------------------------------------------------------------------
     def _configure_simple_default_signals(self) -> None:
         if not hasattr(self, "signal_actions"):
             return
@@ -68,10 +61,6 @@ class IntegratedSpeedProfileWindow(_V9Window):
         if self._v8_ready:
             self._update_combined_plot()
 
-    # ------------------------------------------------------------------
-    # The sidebar may use whatever share of the current window is appropriate.
-    # Forms wrap long rows instead of clipping their right-hand field.
-    # ------------------------------------------------------------------
     def _make_parameter_content_responsive(self) -> None:
         pane = self._parameter_pane
         if pane is None:
@@ -109,7 +98,7 @@ class IntegratedSpeedProfileWindow(_V9Window):
             form.setHorizontalSpacing(10)
             form.setVerticalSpacing(7)
 
-        for widget_type in (QComboBox, QAbstractSpinBox, QDoubleSpinBox, QSpinBox, QLineEdit):
+        for widget_type in (QComboBox, QAbstractSpinBox, QLineEdit):
             for widget in content.findChildren(widget_type):
                 widget.setMinimumWidth(0)
                 widget.setMaximumWidth(16_777_215)
@@ -124,9 +113,13 @@ class IntegratedSpeedProfileWindow(_V9Window):
                 label.setWordWrap(True)
                 label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-        for button in content.findChildren((QPushButton, QToolButton)):
-            button.setMinimumWidth(0)
-            button.setSizePolicy(QSizePolicy.Policy.Preferred, button.sizePolicy().verticalPolicy())
+        for button_type in (QPushButton, QToolButton):
+            for button in content.findChildren(button_type):
+                button.setMinimumWidth(0)
+                button.setSizePolicy(
+                    QSizePolicy.Policy.Preferred,
+                    button.sizePolicy().verticalPolicy(),
+                )
 
         for plot in content.findChildren(pg.PlotWidget):
             plot.setMinimumWidth(0)
@@ -177,11 +170,6 @@ class IntegratedSpeedProfileWindow(_V9Window):
                     "border-radius: 8px; background: palette(base); }"
                 )
 
-    # ------------------------------------------------------------------
-    # Responsive geometry. Ratios are used for the main panes; there are no
-    # hard sidebar widths. On narrow analysis areas the map/collective moves
-    # below the main plot instead of stealing horizontal plot space.
-    # ------------------------------------------------------------------
     @staticmethod
     def _band_for_width(width: int) -> str:
         if width < 1280:
@@ -190,15 +178,17 @@ class IntegratedSpeedProfileWindow(_V9Window):
             return "medium"
         return "wide"
 
-    def _sidebar_ratio(self, band: str) -> float:
+    @staticmethod
+    def _sidebar_ratio(band: str) -> float:
         return {"compact": 0.36, "medium": 0.31, "wide": 0.28}[band]
 
     @staticmethod
     def _set_ratio(splitter: QSplitter, first_ratio: float) -> None:
-        if splitter.orientation() == Qt.Orientation.Horizontal:
-            total = max(1, splitter.width())
-        else:
-            total = max(1, splitter.height())
+        total = (
+            max(1, splitter.width())
+            if splitter.orientation() == Qt.Orientation.Horizontal
+            else max(1, splitter.height())
+        )
         first = max(1, int(round(total * first_ratio)))
         splitter.setSizes([first, max(1, total - first)])
 
@@ -266,9 +256,9 @@ class IntegratedSpeedProfileWindow(_V9Window):
         self._set_combined_axis_visibility(self._active_axis_groups())
 
     def _set_combined_axis_visibility(self, groups: set[str]) -> None:
-        plot_width = max(1, getattr(self, "combined_plot", QWidget()).width())
+        plot = getattr(self, "combined_plot", None)
+        plot_width = max(1, plot.width() if plot is not None else self.width())
         active_count = max(1, len(groups))
-        # Axis width follows available plot width and number of active axes.
         fraction = 0.052 if active_count <= 2 else 0.044
         axis_width = max(44, min(70, int(round(plot_width * fraction))))
 
