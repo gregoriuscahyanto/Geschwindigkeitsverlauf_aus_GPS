@@ -37,7 +37,7 @@ class CompleteApplicationSmokeTests(unittest.TestCase):
                     simulation = window.speed_profile
                     self.assertIsNotNone(simulation)
                     self.assertEqual(
-                        Path(simulation.route_path),
+                        Path(simulation._route_path),
                         runtime_root.resolve() / "state" / "route_result.json",
                     )
                     self.assertTrue(hasattr(simulation, "overview_card"))
