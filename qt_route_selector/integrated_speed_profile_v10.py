@@ -244,10 +244,17 @@ class IntegratedSpeedProfileWindow(_V9Window):
             )
             if force or changed_band or map_splitter.orientation() != target_orientation:
                 map_splitter.setOrientation(target_orientation)
-            if target_orientation == Qt.Orientation.Horizontal:
-                self._set_ratio(map_splitter, 0.67 if band == "wide" else 0.63)
+
+            if stack_right:
+                self.combined_plot.setMinimumHeight(220)
+                self.map_widget.setMinimumHeight(150)
+                self.load_collective_plot.setMinimumHeight(135)
+                self._set_ratio(map_splitter, 0.58)
             else:
-                self._set_ratio(map_splitter, 0.60)
+                self.combined_plot.setMinimumHeight(360)
+                self.map_widget.setMinimumHeight(220)
+                self.load_collective_plot.setMinimumHeight(170)
+                self._set_ratio(map_splitter, 0.67 if band == "wide" else 0.63)
 
         right_splitter = getattr(self, "right_vertical_splitter", None)
         if isinstance(right_splitter, QSplitter):
