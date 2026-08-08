@@ -7,15 +7,21 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QSplitter, QVBoxLayout
 
 try:
+    from ._internal.simulation_layers import integrated_speed_profile as _base_layer
     from ._internal.simulation_layers.integrated_speed_profile import _osm_only_event_positions
     from ._internal.simulation_layers.integrated_speed_profile_v16 import (
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
 except ImportError:
+    from _internal.simulation_layers import integrated_speed_profile as _base_layer
     from _internal.simulation_layers.integrated_speed_profile import _osm_only_event_positions
     from _internal.simulation_layers.integrated_speed_profile_v16 import (
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
+
+# The implementation layers live below _internal, while QML resources remain
+# next to the public application modules.
+_base_layer.APP_DIR = Path(__file__).resolve().parent
 
 
 class IntegratedSpeedProfileWindow(_CurrentWindow):
