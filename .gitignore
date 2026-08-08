@@ -1,4 +1,38 @@
-*.gpx
-augmented/
-results/
-slprj/
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Legacy local workspace directories (not part of the application source)
+/augmented/
+/data/
+/database/
+/databaseSlim/
+/defaults/
+/results/
+/slprj/
+/tracks/
+/versions/
+
+# Legacy application output kept here only for old checkouts
+/selected_region.json
+/route_result.json
+/speed_profile_result.json
+/speed_profile_result.csv
+qt_route_selector/selected_region.json
+qt_route_selector/route_result.json
+qt_route_selector/speed_profile_result.json
+qt_route_selector/speed_profile_result.csv
+
+# Generated geodata / routing caches
+*.osm.pbf
+*.fgb
+*_routing.gpkg
+*.building.gpkg
+
+# Editors / operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
