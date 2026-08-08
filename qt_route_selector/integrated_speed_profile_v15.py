@@ -33,7 +33,6 @@ class IntegratedSpeedProfileWindow(_V14Window):
             self._parameter_help_popup = None
             self._parameter_help_key = None
             popup.close()
-            popup.deleteLater()
 
     def _show_parameter_help(self, key: str) -> None:
         # Clicking the same info icon again acts as a natural toggle.
@@ -102,8 +101,8 @@ class IntegratedSpeedProfileWindow(_V14Window):
         screen = QApplication.screenAt(anchor_right) or QApplication.primaryScreen()
         available = screen.availableGeometry() if screen is not None else self.geometry()
 
-        # Popovers may use a bounded pixel width because they float above the
-        # responsive application layout. Their width still adapts to the screen.
+        # Popovers float above the responsive layout. Their width adapts to the
+        # available screen rather than changing the sidebar geometry.
         width = max(280, min(420, int(available.width() * 0.30)))
         popup.setFixedWidth(width)
         browser.document().setTextWidth(max(220, width - 32))
