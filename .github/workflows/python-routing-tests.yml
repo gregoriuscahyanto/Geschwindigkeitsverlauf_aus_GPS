@@ -114,11 +114,15 @@ jobs:
           if set(groups) != expected_groups:
               raise SystemExit("One or more flattened setting groups are missing")
           for title, group in groups.items():
-              if group.isHidden():
-                  raise SystemExit(f"Setting group is hidden: {title}")
               layout = group.layout()
               if layout is None or layout.count() == 0:
                   raise SystemExit(f"Setting group is empty: {title}")
+          for title in {"Kurven", "Fahrzeug"}:
+              if groups[title].isHidden():
+                  raise SystemExit(f"Core setting group is hidden: {title}")
+          for title in {"Ampeln", "Überholen", "Rauschen"}:
+              if not groups[title].isHidden():
+                  raise SystemExit(f"Advanced setting group should start collapsed: {title}")
 
           scroll_areas = simulation.findChildren(QScrollArea)
           if not scroll_areas:
@@ -151,9 +155,18 @@ jobs:
               "sidebar_toggle_button",
               "energy_header_label",
               "parameter_scroll_area",
+              "advanced_parameters_button",
           ):
               if not hasattr(simulation, attribute) or getattr(simulation, attribute) is None:
                   raise SystemExit(f"Simulation UX is missing: {attribute}")
+
+          simulation.advanced_parameters_button.setChecked(True)
+          app.processEvents()
+          for title in {"Ampeln", "Überholen", "Rauschen"}:
+              if groups[title].isHidden():
+                  raise SystemExit(f"Advanced setting group cannot be expanded: {title}")
+          simulation.advanced_parameters_button.setChecked(False)
+          app.processEvents()
 
           if len(simulation.preview_controller.plots) != 6:
               raise SystemExit("Technical parameter mini-plots are incomplete")
@@ -270,6 +283,6 @@ jobs:
               if expected not in inventory:
                   raise SystemExit(f"Coverage status entry is missing: {expected}")
 
-          print("Unified Qt application uses responsive ratios, simple defaults and adaptive map stacking")
+          print("Unified Qt application uses responsive ratios, simple defaults and progressive parameter disclosure")
           window.close()
           PY
