@@ -220,8 +220,8 @@ class IntegratedSpeedProfileWindow(_V6Window):
             self.simulation_busy_bar.setMaximumHeight(16)
 
     def _apply_roomy_sizes(self) -> None:
-        # Do this after all inherited layout code has run. It intentionally
-        # overrides the older fixed minimum heights with a splitter-based layout.
+        # Re-apply after inherited plot updates because older versions still set
+        # larger fixed minimum heights intended for the pre-splitter layout.
         for plot in (
             self.speed_plot,
             self.longitudinal_plot,
@@ -235,6 +235,14 @@ class IntegratedSpeedProfileWindow(_V6Window):
             self.plot_stack_splitter.setSizes([210, 160, 160, 205])
         if self.right_vertical_splitter is not None:
             self.right_vertical_splitter.setSizes([420, 285])
+
+    def _apply_plot_layout(self) -> None:
+        super()._apply_plot_layout()
+        # During inherited construction the new splitters do not exist yet.
+        # Once V7 has installed them, keep their roomier constraints on every
+        # recalculation / axis change.
+        if self.plot_stack_splitter is not None or self.right_vertical_splitter is not None:
+            self._apply_roomy_sizes()
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)
