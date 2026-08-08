@@ -26,10 +26,30 @@ class CompleteApplicationWindow(_BaseWindow):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        self._stabilize_qml_backend_lifetimes()
         self.setMinimumSize(920, 640)
         if hasattr(self, "route_container"):
             self.route_container.setMinimumSize(640, 420)
         self._hide_manual_road_data_button()
+
+    def _stabilize_qml_backend_lifetimes(self) -> None:
+        """Keep context objects alive until the QQmlApplicationEngine is torn down.
+
+        Without QObject ownership, Python attribute destruction during application
+        shutdown can release a context object before QML has finished evaluating
+        its final bindings. On Windows this showed up as repeated
+        ``Cannot read property ... of null`` messages from main.qml.
+        """
+        engine = getattr(self, "qml_engine", None)
+        if engine is None:
+            return
+        for obj in (
+            getattr(self, "route_selector", None),
+            getattr(self, "route_point_model", None),
+            getattr(self, "traffic_signal_model", None),
+        ):
+            if isinstance(obj, QObject) and obj.parent() is None:
+                obj.setParent(engine)
 
     def _build_route_page(self) -> QWidget:
         """One compact status card; region and data selection are automatic."""
