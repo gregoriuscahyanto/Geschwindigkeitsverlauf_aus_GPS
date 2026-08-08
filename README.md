@@ -141,43 +141,83 @@ Das verwendete Höhenmodell beschreibt die Geländeoberfläche. Dadurch können 
 7. Geschwindigkeits-, Beschleunigungs-, Höhen-, Leistungs- und Energieverläufe analysieren.
 8. Optional Varianten vergleichen, Lastkollektive betrachten und Ergebnisse exportieren.
 
-## Schnellstart unter Windows / VS Code
+## Installation / Einrichtung unter Windows
 
-Empfohlen wird Python 3.11 (64 Bit). Das Setup erzeugt eine normale `.venv` direkt im Repository. Dadurch erkennt VS Code die Projektumgebung automatisch bzw. kann sie über **Python: Select Interpreter** auswählen.
+Die Anwendung benötigt **Python 3.11 (64 Bit)**. Adminrechte sind nicht erforderlich. Es wird nichts nach `Program Files` installiert: Das Setup legt lediglich eine lokale `.venv` im Projektverzeichnis an und installiert dort die Python-Abhängigkeiten.
+
+Für den Benutzer soll die Einrichtung möglichst immer gleich aussehen:
 
 ```powershell
 .\scripts\setup_windows.ps1
 ```
 
-Danach entweder ein neues VS-Code-Terminal öffnen oder die Umgebung manuell aktivieren:
+Das Skript erkennt automatisch, ob ein lokales `wheelhouse` vorhanden ist:
+
+- **mit `wheelhouse`**: vollständig lokale Installation ohne Zugriff auf PyPI,
+- **ohne `wheelhouse`**: normale Installation über den konfigurierten Python-Paketindex.
+
+Nach erfolgreicher Einrichtung kann direkt gestartet werden:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
+python -m qt_route_selector
 ```
 
-Falls PowerShell die Aktivierung nur wegen der Execution Policy blockiert, reicht für das aktuelle Terminal:
+Oder Einrichtung und Start in einem Schritt:
+
+```powershell
+.\scripts\setup_windows.ps1 -Run
+```
+
+### Enterprise-PC ohne Zugriff auf PyPI
+
+Wenn der Enterprise-PC Python ausführen darf, aber PyPI bzw. `pip install` über das Internet blockiert ist, wird ein **Offline-Wheelhouse** verwendet. Darin liegen alle benötigten Pakete einschließlich ihrer Unterabhängigkeiten bereits als Windows-Wheels. Dadurch müssen keine Bibliotheken einzeln von pypi.org heruntergeladen werden.
+
+Das Wheelhouse wird **einmal auf einem Windows-PC mit Internetzugang und Python 3.11 64 Bit** vorbereitet:
+
+```powershell
+.\scripts\build_offline_dependencies.ps1
+```
+
+Das Skript liest `requirements.txt`, lädt automatisch alle direkten und transitiven Abhängigkeiten als Binär-Wheels und legt sie hier ab:
+
+```text
+<Repository>\wheelhouse\
+```
+
+Vor einem Neuaufbau wird ein vorhandenes Wheelhouse entfernt, damit keine veralteten Paketversionen übrig bleiben. Zusätzlich wird eine `MANIFEST.txt` mit Zielplattform, Hash der `requirements.txt` und den enthaltenen Wheel-Dateien erzeugt.
+
+Danach wird der **gesamte Projektordner inklusive `wheelhouse`** auf den Enterprise-PC kopiert. Dort genügt wieder der normale Einrichtungsbefehl:
+
+```powershell
+.\scripts\setup_windows.ps1
+```
+
+Das Setup erkennt die lokalen Wheels automatisch und verwendet intern ausschließlich:
+
+```text
+--no-index --find-links <Repository>\wheelhouse
+```
+
+Damit findet während der Installation **kein Zugriff auf PyPI** statt.
+
+Der Benutzer muss also auf dem Enterprise-PC keine einzelnen Pakete suchen, keine URLs kennen und keine `pip install`-Befehle selbst eingeben.
+
+> **Wichtig:** Dieser Offline-Weg setzt voraus, dass das in der lokalen Python-Umgebung enthaltene `pip` grundsätzlich ausgeführt werden darf. Es wird dabei nur als lokaler Paketinstaller verwendet und greift nicht auf das Internet zu. Wenn eine Unternehmensrichtlinie die Ausführung von `pip` selbst vollständig verbietet, ist dafür eine Freigabe durch die IT oder ein anderes, zentral freigegebenes Deployment-Verfahren erforderlich.
+
+### Wenn PowerShell die Aktivierung blockiert
+
+Falls nur die PowerShell Execution Policy die Aktivierung der `.venv` verhindert, kann sie für das aktuelle Terminal gesetzt werden:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 .\.venv\Scripts\Activate.ps1
 ```
 
-Anschließend startet die Anwendung einfach mit:
-
-```powershell
-python -m qt_route_selector
-```
-
-Ohne Aktivierung kann sie ebenfalls direkt über die Projektumgebung gestartet werden:
+Alternativ ist keine Aktivierung erforderlich. Die Anwendung kann direkt mit dem Python der Projektumgebung gestartet werden:
 
 ```powershell
 & ".\.venv\Scripts\python.exe" -m qt_route_selector
-```
-
-Das Setup kann Installation und Start auch zusammen ausführen:
-
-```powershell
-.\scripts\setup_windows.ps1 -Run
 ```
 
 ## Anwendung
@@ -242,6 +282,7 @@ Ein typischer lokaler Projektroot sieht danach so aus:
 ```text
 .github/
 .venv/                    # lokal, von Git ignoriert
+wheelhouse/               # optional, lokal, für Offline-Installation
 qt_route_selector/
 scripts/
 .gitattributes
@@ -278,6 +319,11 @@ qt_route_selector/
   parameter_help.py
   tests/
   _internal/simulation_layers/ # private, getestete UI-Implementierungsschichten
+
+scripts/
+  setup_windows.ps1            # .venv anlegen, Dependencies installieren, optional starten
+  build_offline_dependencies.ps1 # vollständiges Windows-x64-Wheelhouse vorbereiten
+  cleanup_legacy_workspace.ps1 # alte lokale Workspace-Daten sicher migrieren
 ```
 
 Die Dateien unter `_internal/` sind Implementierungsdetails. Externer Code sollte nur die öffentlichen Module unter `qt_route_selector` verwenden.
@@ -285,6 +331,8 @@ Die Dateien unter `_internal/` sind Implementierungsdetails. Externer Code sollt
 ## Abhängigkeiten
 
 `requirements.txt` enthält die für den aktuellen Stand getesteten Python-Versionen. `scripts/setup_windows.ps1` installiert sie automatisch in `.venv` und prüft danach zentrale Laufzeitmodule wie PySide6, PyQtGraph, NumPy, GeoPandas und Rasterio.
+
+Für Offline-Rechner erzeugt `scripts/build_offline_dependencies.ps1` aus derselben `requirements.txt` ein vollständiges lokales `wheelhouse`. Der Ordner ist bewusst per `.gitignore` ausgeschlossen, da die Binärpakete groß, plattformspezifisch und jederzeit reproduzierbar sind. Wenn sich `requirements.txt` ändert, sollte das Wheelhouse neu erzeugt werden.
 
 ## Tests
 
@@ -298,4 +346,4 @@ GitHub Actions installiert `requirements.txt`, kompiliert das Paket und führt d
 
 ## Generierte Dateien
 
-Laufzeitdaten gehören nicht in Git. Die `.gitignore` schließt `.venv`, Runtime-Ausgaben, Geodaten und die Verzeichnisnamen des alten Prototype-Workspaces aus, damit sie bei bestehenden Checkouts nicht versehentlich committed werden.
+Laufzeitdaten gehören nicht in Git. Die `.gitignore` schließt `.venv`, das lokal erzeugte `wheelhouse`, Runtime-Ausgaben, Geodaten und die Verzeichnisnamen des alten Prototype-Workspaces aus, damit sie bei bestehenden Checkouts nicht versehentlich committed werden.
