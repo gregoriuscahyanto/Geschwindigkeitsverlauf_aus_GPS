@@ -233,8 +233,12 @@ jobs:
               raise SystemExit("Map and load collective are not in a resizable right-side splitter")
           if right_stack.parentWidget() is not simulation.right_analysis_panel:
               raise SystemExit("Right-side analysis splitter is outside its panel")
-          if simulation._parameter_pane is None or simulation._parameter_pane.maximumWidth() > 420:
-              raise SystemExit("Parameter pane is still too wide for the analysis layout")
+          if simulation._parameter_pane is None:
+              raise SystemExit("Parameter pane is missing")
+          if simulation._parameter_pane.minimumWidth() < 450:
+              raise SystemExit("Parameter pane is too narrow and can clip controls")
+          if simulation._parameter_pane.maximumWidth() < 520:
+              raise SystemExit("Parameter pane cannot expand enough for parameter controls")
 
           if simulation.dem_status_label is None:
               raise SystemExit("Automatic DEM status is missing")
@@ -262,6 +266,6 @@ jobs:
               if expected not in inventory:
                   raise SystemExit(f"Coverage status entry is missing: {expected}")
 
-          print("Unified Qt application uses a combined multi-axis plot, modern sidebar, compact energy header and lazy loading indicators")
+          print("Unified Qt application uses robust multi-axis plotting, unclipped parameters and lazy loading indicators")
           window.close()
           PY
