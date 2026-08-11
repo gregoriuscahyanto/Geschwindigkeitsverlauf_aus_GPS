@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
@@ -20,12 +21,12 @@ MAT_EXPORT_VERSION = "1.0"
 
 
 def _jsonable(value: Any) -> Any:
-    """Convert simulation objects into a lossless-enough JSON representation."""
+    """Convert simulation objects into standards-compliant JSON values."""
 
     if isinstance(value, np.ndarray):
-        return value.tolist()
+        return _jsonable(value.tolist())
     if isinstance(value, np.generic):
-        return value.item()
+        return _jsonable(value.item())
     if isinstance(value, Path):
         return str(value)
     if is_dataclass(value):
@@ -34,7 +35,9 @@ def _jsonable(value: Any) -> Any:
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if value is None or isinstance(value, (str, int, bool)):
         return value
     if hasattr(value, "__dict__"):
         return {
@@ -43,6 +46,10 @@ def _jsonable(value: Any) -> Any:
             if not str(key).startswith("_")
         }
     return str(value)
+
+
+def _json_text(value: Any) -> str:
+    return json.dumps(_jsonable(value), ensure_ascii=False, allow_nan=False)
 
 
 def _mat_field_name(name: str) -> str:
@@ -73,10 +80,10 @@ def _mat_value(value: Any) -> Any:
         if all(isinstance(item, str) for item in value):
             return np.asarray(value, dtype=object)
         # Complex heterogeneous lists are retained in the JSON mirrors below.
-        return json.dumps(_jsonable(value), ensure_ascii=False)
+        return _json_text(value)
     if isinstance(value, (str, bool, int, float)):
         return value
-    return json.dumps(_jsonable(value), ensure_ascii=False)
+    return _json_text(value)
 
 
 def _float_array(value: Any, length: int | None = None, fill: float = np.nan) -> np.ndarray:
@@ -163,7 +170,7 @@ def _event_tables(events: Mapping[str, Any]) -> dict[str, Any]:
         "traffic_lights": np.asarray(traffic_rows, dtype=float).reshape((-1, 2)),
         "traffic_light_intervals_columns": np.asarray(["start_s", "end_s"], dtype=object),
         "traffic_light_intervals": np.asarray(dwell_rows, dtype=float).reshape((-1, 2)),
-        "json": json.dumps(_jsonable(events), ensure_ascii=False),
+        "json": _json_text(events),
     }
 
 
@@ -201,6 +208,7 @@ def export_matlab_simulation(
     power_data: Mapping[str, Any] | None = None,
     elevation_m: np.ndarray | None = None,
     source_route: str | Path | None = None,
+    source_dem: str | Path | None = None,
     comparison: Mapping[str, Any] | None = None,
 ) -> Path:
     """Write one comprehensive MATLAB MAT v5 file for the current simulation.
@@ -379,11 +387,15 @@ def export_matlab_simulation(
     route_data = dict(route or {})
     route_columns, route_coordinates = _route_coordinate_table(route_data)
     event_mapping = events if isinstance(events, Mapping) else {}
+    parameter_mapping = parameters or result.get("parameters", {})
+    if not isinstance(parameter_mapping, Mapping):
+        parameter_mapping = {}
 
     metadata = {
         "format_version": MAT_EXPORT_VERSION,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "source_route": str(source_route or ""),
+        "source_dem": str(source_dem or ""),
         "description": (
             "GPS-Routenplaner: vollständiger Route-, Fahrdynamik-, Höhen-, Kurven-, "
             "Leistungs- und Energieexport"
@@ -393,7 +405,7 @@ def export_matlab_simulation(
     payload: dict[str, Any] = {
         "metadata": metadata,
         "summary": _numeric_struct(summary if isinstance(summary, Mapping) else {}),
-        "parameters": _numeric_struct(parameters or result.get("parameters", {})),
+        "parameters": _numeric_struct(parameter_mapping),
         "distance": distance_struct,
         "time": time_struct,
         "power": power_struct,
@@ -405,10 +417,10 @@ def export_matlab_simulation(
         "time_table": time_table,
         "route_coordinate_columns": route_columns,
         "route_coordinates": route_coordinates,
-        "route_json": json.dumps(_jsonable(route_data), ensure_ascii=False),
-        "simulation_json": json.dumps(_jsonable(result), ensure_ascii=False),
-        "events_json": json.dumps(_jsonable(event_mapping), ensure_ascii=False),
-        "comparison_json": json.dumps(_jsonable(comparison or {}), ensure_ascii=False),
+        "route_json": _json_text(route_data),
+        "simulation_json": _json_text(result),
+        "events_json": _json_text(event_mapping),
+        "comparison_json": _json_text(comparison or {}),
     }
 
     savemat(
