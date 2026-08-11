@@ -22,6 +22,7 @@ try:
     from ._internal.simulation_layers.integrated_speed_profile_v16 import (
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
+    from .matlab_table_loader import write_matlab_table_loader
     from .runtime_paths import exports_dir
 except ImportError:
     from _internal.simulation_layers import integrated_speed_profile as _base_layer
@@ -29,6 +30,7 @@ except ImportError:
     from _internal.simulation_layers.integrated_speed_profile_v16 import (
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
+    from matlab_table_loader import write_matlab_table_loader
     from runtime_paths import exports_dir
 
 # The implementation layers live below _internal, while QML resources remain
@@ -92,7 +94,8 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
                 button.setText("MAT exportieren")
                 button.setToolTip(
                     "Vollständigen Simulationsdatensatz als MATLAB-.mat exportieren, "
-                    "inklusive Route, Kurvenradius, Höhenprofil, Leistung und Energie."
+                    "inklusive Route, Kurvenradius, Höhenprofil, Leistung und Energie. "
+                    "Zusätzlich wird ein MATLAB-Loader für table/timetable erzeugt."
                 )
 
     @staticmethod
@@ -117,7 +120,7 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
         return export_matlab_simulation
 
     def export_result(self) -> None:
-        """Export the complete current simulation as one MATLAB MAT file."""
+        """Export the complete current simulation plus a MATLAB table loader."""
         if self._result is None:
             QMessageBox.information(
                 self,
@@ -163,11 +166,22 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
                 source_dem=getattr(self, "_dem_path", None),
                 comparison=comparison,
             )
+            loader_path = write_matlab_table_loader(mat_path)
         except Exception as exc:
             QMessageBox.critical(self, "Export fehlgeschlagen", str(exc))
             return
 
-        self.statusBar().showMessage(f"MATLAB-Export gespeichert: {mat_path}")
+        self.statusBar().showMessage(
+            f"MATLAB-Export gespeichert: {mat_path.name}; Loader: {loader_path.name}"
+        )
+        QMessageBox.information(
+            self,
+            "MATLAB-Export fertig",
+            f"Gespeichert:\n{mat_path}\n\n"
+            f"MATLAB-Loader:\n{loader_path}\n\n"
+            f"In MATLAB einfach '{loader_path.stem}' ausführen. Danach stehen "
+            "distanceTable, driveTimetable, powerTimetable und trafficLightTable bereit.",
+        )
 
 
 def main() -> int:
