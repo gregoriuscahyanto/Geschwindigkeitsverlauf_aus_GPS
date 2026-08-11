@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import sys
-import tempfile
 from pathlib import Path
 from typing import Callable
 
@@ -25,7 +24,6 @@ try:
     from ._internal.simulation_layers.integrated_speed_profile_v16 import (
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
-    from .matlab_native_export import convert_to_native_matlab_tables
     from .runtime_paths import exports_dir
 except ImportError:
     from _internal.simulation_layers import integrated_speed_profile as _base_layer
@@ -33,7 +31,6 @@ except ImportError:
     from _internal.simulation_layers.integrated_speed_profile_v16 import (
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
-    from matlab_native_export import convert_to_native_matlab_tables
     from runtime_paths import exports_dir
 
 # The implementation layers live below _internal, while QML resources remain
@@ -42,7 +39,7 @@ _base_layer.APP_DIR = Path(__file__).resolve().parent
 
 
 class _MatExportWorker(QObject):
-    """Run the potentially slow MATLAB export without blocking the Qt GUI."""
+    """Run MAT serialization without blocking the Qt GUI."""
 
     succeeded = Signal(str)
     failed = Signal(str)
@@ -117,19 +114,20 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
         self.overview_card = card
 
     def _configure_mat_export_ui(self) -> None:
-        """Make the normal export action explicitly describe the native MAT output."""
+        """Describe the direct Python MAT export in the normal export action."""
         for button in self.findChildren(QPushButton):
             if "exportieren" in button.text().lower():
                 button.setText("MAT exportieren")
                 button.setToolTip(
-                    "Eine MATLAB-.mat erzeugen, die ausschließlich native table/timetable-"
-                    "Variablen enthält – inklusive Route, Kurvenradius, Höhenprofil, Leistung und Energie."
+                    "Eine MATLAB-.mat direkt aus Python erzeugen. Alle exportierten Variablen "
+                    "sind einzelne double-Arrays, inklusive Zeit, Geschwindigkeit, Radius, "
+                    "Höhenprofil, Leistung und Energie."
                 )
                 self._mat_export_button = button
 
     @staticmethod
     def _mat_exporter():
-        """Load the SciPy-based staging writer only when the user exports."""
+        """Load SciPy only when the user actually exports."""
         try:
             from .mat_export import export_matlab_simulation
         except ImportError as package_error:
@@ -137,7 +135,7 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
                 from mat_export import export_matlab_simulation
             except ImportError:
                 raise RuntimeError(
-                    "Für den MATLAB-Export fehlt SciPy in der aktuellen .venv.\n\n"
+                    "Für den MAT-Export fehlt SciPy in der aktuellen .venv.\n\n"
                     "Bitte im Projektordner einmal ausführen:\n"
                     ".\\scripts\\setup_windows.ps1\n\n"
                     "Danach die Anwendung neu starten."
@@ -145,9 +143,9 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
         return export_matlab_simulation
 
     def export_result(self) -> None:
-        """Start an asynchronous MAT export containing only MATLAB tables/timetables."""
+        """Start an asynchronous MAT export containing individual double arrays."""
         if self._mat_export_thread is not None and self._mat_export_thread.isRunning():
-            self.statusBar().showMessage("MATLAB-Export läuft bereits …")
+            self.statusBar().showMessage("MAT-Export läuft bereits …")
             return
 
         if self._result is None:
@@ -160,7 +158,7 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
 
         selected, _ = QFileDialog.getSaveFileName(
             self,
-            "Vollständige Simulation als MATLAB-Datei exportieren",
+            "Vollständige Simulation als MAT-Datei exportieren",
             str(exports_dir() / "speed_profile_result.mat"),
             "MATLAB-Datei (*.mat)",
         )
@@ -174,8 +172,8 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
         try:
             export_matlab_simulation = self._mat_exporter()
 
-            # Snapshot everything the background worker needs. The worker must
-            # not read QWidget state or mutable simulation state from its thread.
+            # Snapshot everything before entering the worker thread. The worker
+            # does not access QWidget state or mutable simulation state.
             result_snapshot = copy.deepcopy(self._result)
             route_snapshot = copy.deepcopy(self._route or {})
             parameters_snapshot = copy.deepcopy(self.parameters())
@@ -186,8 +184,6 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
                 "results": copy.deepcopy(getattr(self, "_comparison_results", [])),
                 "resistance": copy.deepcopy(getattr(self, "_comparison_resistance", [])),
             }
-            source_route = str(self._route_path or "")
-            source_dem = str(getattr(self, "_dem_path", "") or "")
 
             spatial_distance = np.asarray(
                 result_snapshot.get("distance", {}).get("distance_m", []),
@@ -201,23 +197,15 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
             return
 
         def job() -> Path:
-            # SciPy writes a temporary staging MAT only. MATLAB then constructs
-            # the native table/timetable objects. Raw matrices/structs are not
-            # copied into the final file and the staging directory is removed.
-            with tempfile.TemporaryDirectory(prefix="gps-routenplaner-mat-") as temporary:
-                raw_path = Path(temporary) / "raw_export.mat"
-                export_matlab_simulation(
-                    result_snapshot,
-                    raw_path,
-                    route=route_snapshot,
-                    parameters=parameters_snapshot,
-                    power_data=power_snapshot,
-                    elevation_m=elevation_snapshot,
-                    source_route=source_route,
-                    source_dem=source_dem,
-                    comparison=comparison_snapshot,
-                )
-                return convert_to_native_matlab_tables(raw_path, path)
+            return export_matlab_simulation(
+                result_snapshot,
+                path,
+                route=route_snapshot,
+                parameters=parameters_snapshot,
+                power_data=power_snapshot,
+                elevation_m=elevation_snapshot,
+                comparison=comparison_snapshot,
+            )
 
         thread = QThread(self)
         worker = _MatExportWorker(job)
@@ -237,25 +225,25 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
             self._mat_export_button.setEnabled(False)
             self._mat_export_button.setText("MAT-Export läuft …")
         self.statusBar().showMessage(
-            "MATLAB-Export läuft im Hintergrund … Die Anwendung bleibt bedienbar."
+            "MAT-Export läuft im Hintergrund … Die Anwendung bleibt bedienbar."
         )
         thread.start()
 
     @Slot(str)
     def _on_mat_export_succeeded(self, mat_path: str) -> None:
-        self.statusBar().showMessage(f"MATLAB-Export gespeichert: {mat_path}", 10000)
+        self.statusBar().showMessage(f"MAT-Export gespeichert: {mat_path}", 10000)
         QMessageBox.information(
             self,
-            "MATLAB-Export fertig",
+            "MAT-Export fertig",
             f"Gespeichert:\n{mat_path}\n\n"
-            "Die finale Datei enthält ausschließlich table/timetable-Variablen, u. a. "
-            "distanceTable, driveTimetable, powerTimetable, loadCollectiveTable, "
-            "parametersTable und summaryTable."
+            "Die Datei wurde vollständig in Python erzeugt. Alle exportierten Workspace-"
+            "Variablen sind einzelne double-Arrays, z. B. time_s, v_kmh, elevation_m, "
+            "curve_radius_m und p_total_kw."
         )
 
     @Slot(str)
     def _on_mat_export_failed(self, message: str) -> None:
-        self.statusBar().showMessage("MATLAB-Export fehlgeschlagen", 10000)
+        self.statusBar().showMessage("MAT-Export fehlgeschlagen", 10000)
         QMessageBox.critical(self, "Export fehlgeschlagen", message)
 
     @Slot()
