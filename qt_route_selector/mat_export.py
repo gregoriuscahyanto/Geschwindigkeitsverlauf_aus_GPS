@@ -103,6 +103,8 @@ def _float_array(value: Any, length: int | None = None, fill: float = np.nan) ->
 
 
 def _interp_finite(distance_m: np.ndarray, values: np.ndarray, query_m: np.ndarray) -> np.ndarray:
+    """Linearly interpolate continuous finite values along the route."""
+
     if query_m.size == 0:
         return np.empty(0, dtype=float)
     distance = np.asarray(distance_m, dtype=float).reshape(-1)
@@ -122,6 +124,38 @@ def _interp_finite(distance_m: np.ndarray, values: np.ndarray, query_m: np.ndarr
     if x.size == 1:
         return np.full(query_m.shape, float(y[0]), dtype=float)
     return np.interp(query_m, x, y)
+
+
+def _nearest_values(distance_m: np.ndarray, values: np.ndarray, query_m: np.ndarray) -> np.ndarray:
+    """Sample route context by nearest point while preserving meaningful infinities."""
+
+    if query_m.size == 0:
+        return np.empty(0, dtype=float)
+    distance = np.asarray(distance_m, dtype=float).reshape(-1)
+    data = np.asarray(values, dtype=float).reshape(-1)
+    if distance.size != data.size or distance.size == 0:
+        return np.full(query_m.shape, np.nan, dtype=float)
+
+    valid = np.isfinite(distance) & ~np.isnan(data)
+    if not np.any(valid):
+        return np.full(query_m.shape, np.nan, dtype=float)
+
+    x = distance[valid]
+    y = data[valid]
+    order = np.argsort(x, kind="stable")
+    x = x[order]
+    y = y[order]
+    x, indexes = np.unique(x, return_index=True)
+    y = y[indexes]
+    if x.size == 1:
+        return np.full(query_m.shape, float(y[0]), dtype=float)
+
+    positions = np.searchsorted(x, query_m, side="left")
+    right = np.clip(positions, 0, x.size - 1)
+    left = np.clip(positions - 1, 0, x.size - 1)
+    choose_right = np.abs(query_m - x[right]) < np.abs(query_m - x[left])
+    indexes = np.where(choose_right, right, left)
+    return y[indexes]
 
 
 def _numeric_struct(mapping: Mapping[str, Any]) -> dict[str, Any]:
@@ -257,26 +291,23 @@ def export_matlab_simulation(
     )
 
     time_struct = _numeric_struct(time_data)
-    contextual_spatial_keys = (
-        "road_limit_kmh",
-        "surface_limit_kmh",
-        "curve_limit_kmh",
-        "base_target_kmh",
-        "planned_speed_kmh",
-        "actual_speed_kmh",
-        "noise_kmh",
-    )
     time_struct.update(
         {
             "latitude": _interp_finite(spatial_distance, latitude, time_distance),
             "longitude": _interp_finite(spatial_distance, longitude, time_distance),
             "elevation_m": _interp_finite(spatial_distance, elevation, time_distance),
-            "curve_radius_m": _interp_finite(spatial_distance, radius, time_distance),
+            "curve_radius_m": _nearest_values(spatial_distance, radius, time_distance),
             "grade_fraction": _interp_finite(spatial_distance, grade_spatial, time_distance),
             "grade_pct": _interp_finite(spatial_distance, grade_pct_spatial, time_distance),
         }
     )
-    for key in contextual_spatial_keys:
+    for key in ("road_limit_kmh", "surface_limit_kmh", "curve_limit_kmh"):
+        time_struct[key] = _nearest_values(
+            spatial_distance,
+            _float_array(distance_data.get(key, []), n_distance),
+            time_distance,
+        )
+    for key in ("base_target_kmh", "planned_speed_kmh", "actual_speed_kmh", "noise_kmh"):
         time_struct[key] = _interp_finite(
             spatial_distance,
             _float_array(distance_data.get(key, []), n_distance),
