@@ -14,7 +14,7 @@ from qt_route_selector.matlab_native_export import (
 
 
 class MatlabNativeExportTest(unittest.TestCase):
-    def test_statement_creates_native_tables_and_timetable_in_final_mat(self) -> None:
+    def test_statement_saves_only_native_tables_and_timetables(self) -> None:
         raw = Path(r"C:\Temp\raw export.mat")
         output = Path(r"C:\Temp\final export.mat")
         statement = _build_matlab_statement(raw, output)
@@ -25,11 +25,22 @@ class MatlabNativeExportTest(unittest.TestCase):
         self.assertIn("driveTimetable=table2timetable", statement)
         self.assertIn("rowTime=seconds(driveTable.time_s)", statement)
         self.assertIn("powerTimetable=driveTimetable(:,powerNames)", statement)
+        self.assertIn("loadCollectiveTable=table", statement)
         self.assertIn("trafficLightTable=array2table", statement)
+        self.assertIn("trafficLightIntervalTable=array2table", statement)
         self.assertIn("routeCoordinateTable=array2table", statement)
-        self.assertIn(f"save({output_literal},'-struct','S','-v7.3')", statement)
+        self.assertIn("parametersTable=struct2table", statement)
+        self.assertIn("summaryTable=struct2table", statement)
+        self.assertIn("metadataTable=struct2table", statement)
+        self.assertIn("rawContextTable=table", statement)
+
+        # Raw SciPy staging variables must never be copied into the final MAT.
+        self.assertNotIn("'-struct','S'", statement)
+        self.assertNotIn("'distance_table'", statement)
+        self.assertNotIn("'time_table'", statement)
+        self.assertNotIn("'route_json'", statement.split(f"save({output_literal}")[-1])
         self.assertIn(
-            f"save({output_literal},'distanceTable','driveTable','driveTimetable'",
+            f"save({output_literal},'distanceTable','driveTable','driveTimetable','powerTimetable'",
             statement,
         )
 
@@ -49,6 +60,7 @@ class MatlabNativeExportTest(unittest.TestCase):
                 self.assertEqual(args[0], str(matlab.resolve()))
                 self.assertEqual(args[1], "-batch")
                 self.assertIn("distanceTable=array2table", args[2])
+                self.assertNotIn("'-struct','S'", args[2])
                 output.write_bytes(b"native-mat")
                 return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
