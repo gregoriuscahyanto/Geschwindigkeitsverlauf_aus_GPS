@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,7 @@ try:
     from ._internal.simulation_layers.integrated_speed_profile_v16 import (
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
-    from .matlab_table_loader import write_matlab_table_loader
+    from .matlab_native_export import convert_to_native_matlab_tables
     from .runtime_paths import exports_dir
 except ImportError:
     from _internal.simulation_layers import integrated_speed_profile as _base_layer
@@ -30,7 +31,7 @@ except ImportError:
     from _internal.simulation_layers.integrated_speed_profile_v16 import (
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
-    from matlab_table_loader import write_matlab_table_loader
+    from matlab_native_export import convert_to_native_matlab_tables
     from runtime_paths import exports_dir
 
 # The implementation layers live below _internal, while QML resources remain
@@ -88,23 +89,18 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
         self.overview_card = card
 
     def _configure_mat_export_ui(self) -> None:
-        """Make the normal export action explicitly describe the MAT output."""
+        """Make the normal export action explicitly describe the native MAT output."""
         for button in self.findChildren(QPushButton):
             if "exportieren" in button.text().lower():
                 button.setText("MAT exportieren")
                 button.setToolTip(
-                    "Vollständigen Simulationsdatensatz als MATLAB-.mat exportieren, "
-                    "inklusive Route, Kurvenradius, Höhenprofil, Leistung und Energie. "
-                    "Zusätzlich wird ein MATLAB-Loader für table/timetable erzeugt."
+                    "Eine MATLAB-.mat direkt mit nativen table/timetable-Variablen erzeugen, "
+                    "inklusive Route, Kurvenradius, Höhenprofil, Leistung und Energie."
                 )
 
     @staticmethod
     def _mat_exporter():
-        """Load the MAT writer only when the user actually exports.
-
-        This keeps the simulation usable in an existing venv that has not yet
-        been refreshed with the new SciPy dependency.
-        """
+        """Load the SciPy-based raw MAT writer only when the user exports."""
         try:
             from .mat_export import export_matlab_simulation
         except ImportError as package_error:
@@ -120,7 +116,7 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
         return export_matlab_simulation
 
     def export_result(self) -> None:
-        """Export the complete current simulation plus a MATLAB table loader."""
+        """Export one MAT file containing native MATLAB tables/timetables."""
         if self._result is None:
             QMessageBox.information(
                 self,
@@ -138,7 +134,7 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
         if not selected:
             return
 
-        path = Path(selected)
+        path = Path(selected).expanduser().resolve()
         if path.suffix.lower() != ".mat":
             path = path.with_suffix(".mat")
 
@@ -155,32 +151,36 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
                 "results": getattr(self, "_comparison_results", []),
                 "resistance": getattr(self, "_comparison_resistance", []),
             }
-            mat_path = export_matlab_simulation(
-                self._result,
-                path,
-                route=self._route or {},
-                parameters=self.parameters(),
-                power_data=getattr(self, "_resistance_time_data", None),
-                elevation_m=elevation,
-                source_route=self._route_path,
-                source_dem=getattr(self, "_dem_path", None),
-                comparison=comparison,
-            )
-            loader_path = write_matlab_table_loader(mat_path)
+
+            # SciPy creates a complete portable staging MAT. MATLAB itself is
+            # then called non-interactively to turn the numeric matrices into
+            # native table/timetable class objects in the final MAT file. The
+            # temporary staging file is removed automatically afterwards.
+            with tempfile.TemporaryDirectory(prefix="gps-routenplaner-mat-") as temporary:
+                raw_path = Path(temporary) / "raw_export.mat"
+                export_matlab_simulation(
+                    self._result,
+                    raw_path,
+                    route=self._route or {},
+                    parameters=self.parameters(),
+                    power_data=getattr(self, "_resistance_time_data", None),
+                    elevation_m=elevation,
+                    source_route=self._route_path,
+                    source_dem=getattr(self, "_dem_path", None),
+                    comparison=comparison,
+                )
+                mat_path = convert_to_native_matlab_tables(raw_path, path)
         except Exception as exc:
             QMessageBox.critical(self, "Export fehlgeschlagen", str(exc))
             return
 
-        self.statusBar().showMessage(
-            f"MATLAB-Export gespeichert: {mat_path.name}; Loader: {loader_path.name}"
-        )
+        self.statusBar().showMessage(f"MATLAB-Export gespeichert: {mat_path}")
         QMessageBox.information(
             self,
             "MATLAB-Export fertig",
             f"Gespeichert:\n{mat_path}\n\n"
-            f"MATLAB-Loader:\n{loader_path}\n\n"
-            f"In MATLAB einfach '{loader_path.stem}' ausführen. Danach stehen "
-            "distanceTable, driveTimetable, powerTimetable und trafficLightTable bereit.",
+            "Nach load(...) enthält die Datei direkt distanceTable, driveTable, "
+            "driveTimetable, powerTimetable, trafficLightTable und routeCoordinateTable."
         )
 
 
