@@ -18,6 +18,7 @@ class MatlabNativeExportTest(unittest.TestCase):
         raw = Path(r"C:\Temp\raw export.mat")
         output = Path(r"C:\Temp\final export.mat")
         statement = _build_matlab_statement(raw, output)
+        output_literal = _matlab_quote(output)
 
         self.assertIn("distanceTable=array2table", statement)
         self.assertIn("driveTable=array2table", statement)
@@ -26,9 +27,9 @@ class MatlabNativeExportTest(unittest.TestCase):
         self.assertIn("powerTimetable=driveTimetable(:,powerNames)", statement)
         self.assertIn("trafficLightTable=array2table", statement)
         self.assertIn("routeCoordinateTable=array2table", statement)
-        self.assertIn("save('C:\\Temp\\final export.mat','-struct','S','-v7.3')", statement)
+        self.assertIn(f"save({output_literal},'-struct','S','-v7.3')", statement)
         self.assertIn(
-            "save('C:\\Temp\\final export.mat','distanceTable','driveTable','driveTimetable'",
+            f"save({output_literal},'distanceTable','driveTable','driveTimetable'",
             statement,
         )
 
