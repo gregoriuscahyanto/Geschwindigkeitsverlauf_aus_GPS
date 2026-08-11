@@ -22,7 +22,6 @@ try:
     from ._internal.simulation_layers.integrated_speed_profile_v16 import (
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
-    from .mat_export import export_matlab_simulation
     from .runtime_paths import exports_dir
 except ImportError:
     from _internal.simulation_layers import integrated_speed_profile as _base_layer
@@ -30,7 +29,6 @@ except ImportError:
     from _internal.simulation_layers.integrated_speed_profile_v16 import (
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
-    from mat_export import export_matlab_simulation
     from runtime_paths import exports_dir
 
 # The implementation layers live below _internal, while QML resources remain
@@ -97,6 +95,27 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
                     "inklusive Route, Kurvenradius, Höhenprofil, Leistung und Energie."
                 )
 
+    @staticmethod
+    def _mat_exporter():
+        """Load the MAT writer only when the user actually exports.
+
+        This keeps the simulation usable in an existing venv that has not yet
+        been refreshed with the new SciPy dependency.
+        """
+        try:
+            from .mat_export import export_matlab_simulation
+        except ImportError as package_error:
+            try:
+                from mat_export import export_matlab_simulation
+            except ImportError:
+                raise RuntimeError(
+                    "Für den MATLAB-Export fehlt SciPy in der aktuellen .venv.\n\n"
+                    "Bitte im Projektordner einmal ausführen:\n"
+                    ".\\scripts\\setup_windows.ps1\n\n"
+                    "Danach die Anwendung neu starten."
+                ) from package_error
+        return export_matlab_simulation
+
     def export_result(self) -> None:
         """Export the complete current simulation as one MATLAB MAT file."""
         if self._result is None:
@@ -121,6 +140,7 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
             path = path.with_suffix(".mat")
 
         try:
+            export_matlab_simulation = self._mat_exporter()
             spatial_distance = np.asarray(
                 self._result.get("distance", {}).get("distance_m", []),
                 dtype=float,
