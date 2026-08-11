@@ -20,7 +20,7 @@ class MatlabExportTests(unittest.TestCase):
                 "distance_m": distance_m,
                 "road_limit_kmh": np.asarray([50.0, 50.0, 70.0]),
                 "surface_limit_kmh": np.asarray([50.0, 50.0, 70.0]),
-                "curve_limit_kmh": np.asarray([120.0, 35.0, 120.0]),
+                "curve_limit_kmh": np.asarray([np.inf, 35.0, np.inf]),
                 "base_target_kmh": np.asarray([50.0, 35.0, 70.0]),
                 "planned_speed_kmh": np.asarray([0.0, 35.0, 0.0]),
                 "actual_speed_kmh": np.asarray([0.0, 33.0, 0.0]),
@@ -90,6 +90,7 @@ class MatlabExportTests(unittest.TestCase):
                 power_data=power_data,
                 elevation_m=elevation_m,
                 source_route="route_result.json",
+                source_dem="elevation/copernicus-glo30",
             )
             self.assertEqual(output.suffix, ".mat")
             self.assertTrue(output.is_file())
@@ -112,13 +113,29 @@ class MatlabExportTests(unittest.TestCase):
         )
         np.testing.assert_allclose(np.asarray(distance["grade_pct"]), [0.0, 10.0, -6.0])
 
+        time = loaded["time"]
+        np.testing.assert_allclose(
+            np.asarray(time["curve_radius_m"]),
+            np.asarray([np.inf, 42.0, np.inf]),
+        )
+        np.testing.assert_allclose(
+            np.asarray(time["curve_limit_kmh"]),
+            np.asarray([np.inf, 35.0, np.inf]),
+        )
+
         power = loaded["power"]
         self.assertAlmostEqual(float(power["net_energy_kwh"]), 0.03)
         np.testing.assert_allclose(np.asarray(power["total_kw"]), [0.0, 37.0, -17.0])
 
+        metadata = loaded["metadata"]
+        self.assertEqual(str(metadata["source_dem"]), "elevation/copernicus-glo30")
+
         route_roundtrip = json.loads(str(loaded["route_json"]))
         self.assertEqual(route_roundtrip["traffic_signals"][0]["osm_id"], 12345)
         self.assertEqual(route_roundtrip["segments"][0]["highway"], "primary")
+
+        simulation_roundtrip = json.loads(str(loaded["simulation_json"]))
+        self.assertIsNone(simulation_roundtrip["distance"]["curve_radius_m"][0])
 
         columns = [str(item) for item in np.atleast_1d(loaded["distance_columns"])]
         self.assertIn("curve_radius_m", columns)
