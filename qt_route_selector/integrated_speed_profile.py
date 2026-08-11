@@ -140,6 +140,7 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
                 power_data=getattr(self, "_resistance_time_data", None),
                 elevation_m=elevation,
                 source_route=self._route_path,
+                source_dem=getattr(self, "_dem_path", None),
                 comparison=comparison,
             )
         except Exception as exc:
