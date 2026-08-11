@@ -89,16 +89,18 @@ def find_matlab_executable() -> Path | None:
 
 
 def _build_matlab_statement(raw_path: Path, output_path: Path) -> str:
-    """Build MATLAB code that converts raw arrays into native tables/timetables."""
+    """Build MATLAB code that saves only native tables/timetables in the final MAT."""
 
     raw = _matlab_quote(raw_path)
     output = _matlab_quote(output_path)
     return "".join(
         [
             f"S=load({raw});",
+            # Distance-aligned route data.
             "distanceNames=string(S.distance_columns(:))';",
             "distanceNames=matlab.lang.makeUniqueStrings(matlab.lang.makeValidName(distanceNames));",
             "distanceTable=array2table(S.distance_table,'VariableNames',cellstr(distanceNames));",
+            # Time-aligned driving data as table + timetable.
             "timeNames=string(S.time_columns(:))';",
             "timeNames=matlab.lang.makeUniqueStrings(matlab.lang.makeValidName(timeNames));",
             "driveTable=array2table(S.time_table,'VariableNames',cellstr(timeNames));",
@@ -106,22 +108,37 @@ def _build_matlab_statement(raw_path: Path, output_path: Path) -> str:
             "rowTime=seconds(driveTable.time_s);",
             "driveTimetable=table2timetable(removevars(driveTable,'time_s'),'RowTimes',rowTime);",
             "driveTimetable.Properties.DimensionNames{1}='Time';",
+            # Power/energy view.
             "wantedPower={'total_kw','acceleration_kw','grade_kw','rolling_kw','air_kw','trailer_kw','traction_power_kw','recuperation_power_kw','cumulative_traction_energy_kwh','cumulative_recuperation_energy_kwh','cumulative_net_energy_kwh'};",
             "powerNames=wantedPower(ismember(wantedPower,driveTimetable.Properties.VariableNames));",
             "powerTimetable=driveTimetable(:,powerNames);",
+            # Traffic-light tables.
             "trafficLightTable=table();",
             "if isfield(S,'events')&&isfield(S.events,'traffic_lights')&&~isempty(S.events.traffic_lights),trafficNames=string(S.events.traffic_lights_columns(:))';trafficNames=matlab.lang.makeUniqueStrings(matlab.lang.makeValidName(trafficNames));trafficLightTable=array2table(S.events.traffic_lights,'VariableNames',cellstr(trafficNames));end;",
+            "trafficLightIntervalTable=table();",
+            "if isfield(S,'events')&&isfield(S.events,'traffic_light_intervals')&&~isempty(S.events.traffic_light_intervals),intervalNames=string(S.events.traffic_light_intervals_columns(:))';intervalNames=matlab.lang.makeUniqueStrings(matlab.lang.makeValidName(intervalNames));trafficLightIntervalTable=array2table(S.events.traffic_light_intervals,'VariableNames',cellstr(intervalNames));end;",
+            # Original route points.
             "routeCoordinateTable=table();",
             "if isfield(S,'route_coordinates')&&~isempty(S.route_coordinates),coordinateNames=string(S.route_coordinate_columns(:))';coordinateNames=matlab.lang.makeUniqueStrings(matlab.lang.makeValidName(coordinateNames));routeCoordinateTable=array2table(S.route_coordinates,'VariableNames',cellstr(coordinateNames));end;",
-            # Useful units are attached to native tables without changing the raw export.
+            # Signed cumulative load collective as one clean long-format table.
+            "loadCollectiveTable=table(strings(0,1),zeros(0,1),zeros(0,1),'VariableNames',{'branch','time_share_pct','load_kw'});",
+            "if isfield(S,'load_collective'),px=[];py=[];nx=[];ny=[];if isfield(S.load_collective,'positive_time_share_pct'),px=S.load_collective.positive_time_share_pct(:);end;if isfield(S.load_collective,'positive_load'),py=S.load_collective.positive_load(:);end;if isfield(S.load_collective,'negative_time_share_pct'),nx=S.load_collective.negative_time_share_pct(:);end;if isfield(S.load_collective,'negative_load'),ny=S.load_collective.negative_load(:);end;np=min(numel(px),numel(py));nn=min(numel(nx),numel(ny));px=px(1:np);py=py(1:np);nx=nx(1:nn);ny=ny(1:nn);branch=[repmat("positive",np,1);repmat("negative",nn,1)];loadCollectiveTable=table(branch,[px;nx],[py;ny],'VariableNames',{'branch','time_share_pct','load_kw'});end;",
+            # Scalar settings/results as one-row tables.
+            "parametersTable=table();if isfield(S,'parameters')&&isstruct(S.parameters),parametersTable=struct2table(S.parameters,'AsArray',true);end;",
+            "summaryTable=table();if isfield(S,'summary')&&isstruct(S.summary),summaryTable=struct2table(S.summary,'AsArray',true);end;",
+            "metadataTable=table();if isfield(S,'metadata')&&isstruct(S.metadata),metadataTable=struct2table(S.metadata,'AsArray',true);end;",
+            # Keep complete JSON mirrors without exposing strings as top-level variables.
+            "routeJson="";simulationJson="";eventsJson="";comparisonJson="";if isfield(S,'route_json'),routeJson=string(S.route_json);end;if isfield(S,'simulation_json'),simulationJson=string(S.simulation_json);end;if isfield(S,'events_json'),eventsJson=string(S.events_json);end;if isfield(S,'comparison_json'),comparisonJson=string(S.comparison_json);end;rawContextTable=table(routeJson,simulationJson,eventsJson,comparisonJson,'VariableNames',{'route_json','simulation_json','events_json','comparison_json'});",
+            # Units for convenient MATLAB analysis.
             "distanceUnits=containers.Map({'distance_m','latitude_deg','longitude_deg','elevation_m','curve_radius_m','grade_pct','road_limit_kmh','surface_limit_kmh','curve_limit_kmh','base_target_kmh','planned_speed_kmh','actual_speed_kmh','noise_kmh'},{'m','deg','deg','m','m','%','km/h','km/h','km/h','km/h','km/h','km/h','km/h'});",
             "du=repmat({''},1,width(distanceTable));for k=1:width(distanceTable),n=distanceTable.Properties.VariableNames{k};if isKey(distanceUnits,n),du{k}=distanceUnits(n);end;end;distanceTable.Properties.VariableUnits=du;",
             "timeUnits=containers.Map({'distance_m','latitude_deg','longitude_deg','elevation_m','curve_radius_m','speed_kmh','target_kmh','acceleration_mps2','road_limit_kmh','surface_limit_kmh','curve_limit_kmh','grade_pct','total_kw','acceleration_kw','grade_kw','rolling_kw','air_kw','trailer_kw','traction_power_kw','recuperation_power_kw','cumulative_traction_energy_kwh','cumulative_recuperation_energy_kwh','cumulative_net_energy_kwh'},{'m','deg','deg','m','m','km/h','km/h','m/s^2','km/h','km/h','km/h','%','kW','kW','kW','kW','kW','kW','kW','kW','kWh','kWh','kWh'});",
             "tu=repmat({''},1,width(driveTimetable));for k=1:width(driveTimetable),n=driveTimetable.Properties.VariableNames{k};if isKey(timeUnits,n),tu{k}=timeUnits(n);end;end;driveTimetable.Properties.VariableUnits=tu;",
+            "driveTable.Properties.VariableUnits=[{'s'},tu];",
             "if ~isempty(powerNames),powerTimetable.Properties.VariableUnits=driveTimetable.Properties.VariableUnits(ismember(driveTimetable.Properties.VariableNames,powerNames));end;",
-            # Preserve every raw variable first, then append the convenient native objects.
-            f"save({output},'-struct','S','-v7.3');",
-            f"save({output},'distanceTable','driveTable','driveTimetable','powerTimetable','trafficLightTable','routeCoordinateTable','-append');",
+            "loadCollectiveTable.Properties.VariableUnits={'','%','kW'};",
+            # The final MAT intentionally contains no raw matrices, structs or standalone strings.
+            f"save({output},'distanceTable','driveTable','driveTimetable','powerTimetable','loadCollectiveTable','trafficLightTable','trafficLightIntervalTable','routeCoordinateTable','parametersTable','summaryTable','metadataTable','rawContextTable','-v7.3');",
         ]
     )
 
@@ -133,13 +150,12 @@ def convert_to_native_matlab_tables(
     matlab_executable: str | Path | None = None,
     timeout_s: int = 300,
 ) -> Path:
-    """Create a final MAT file containing native MATLAB table/timetable variables.
+    """Create a MAT file whose top-level variables are only table/timetable objects.
 
-    Python MAT writers can create MATLAB-compatible numeric arrays and structs,
-    but a native ``table``/``timetable`` is a MATLAB class object.  This function
-    therefore invokes the locally installed MATLAB non-interactively with
-    ``-batch`` to construct and save those class objects directly into the final
-    MAT file. No companion script is left behind.
+    Python MAT writers can create MATLAB-compatible staging arrays and structs,
+    but native ``table``/``timetable`` objects are MATLAB classes. MATLAB is
+    therefore invoked non-interactively with ``-batch`` to construct the final
+    file. The staging data is never copied into the final MAT file.
     """
 
     raw = Path(raw_path).expanduser().resolve()
