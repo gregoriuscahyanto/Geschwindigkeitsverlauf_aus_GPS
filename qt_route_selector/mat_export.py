@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 from scipy.io import savemat
@@ -14,8 +14,6 @@ except ImportError:
 
 
 def _double_vector(value: Any, length: int | None = None, fill: float = np.nan) -> np.ndarray:
-    """Return an Nx1 float64 array suitable for a MATLAB double variable."""
-
     try:
         array = np.asarray(value, dtype=np.float64).reshape(-1)
     except (TypeError, ValueError):
@@ -30,8 +28,6 @@ def _double_vector(value: Any, length: int | None = None, fill: float = np.nan) 
 
 
 def _double_scalar(value: Any, default: float = np.nan) -> np.ndarray:
-    """Return a 1x1 float64 array."""
-
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -44,8 +40,6 @@ def _flat(vector: np.ndarray) -> np.ndarray:
 
 
 def _interp_finite(distance_m: np.ndarray, values: np.ndarray, query_m: np.ndarray) -> np.ndarray:
-    """Interpolate continuous finite values along the route."""
-
     query = _flat(query_m)
     if query.size == 0:
         return np.empty((0, 1), dtype=np.float64)
@@ -69,8 +63,6 @@ def _interp_finite(distance_m: np.ndarray, values: np.ndarray, query_m: np.ndarr
 
 
 def _nearest_values(distance_m: np.ndarray, values: np.ndarray, query_m: np.ndarray) -> np.ndarray:
-    """Nearest-neighbour sampling that preserves meaningful +/-Inf values."""
-
     query = _flat(query_m)
     if query.size == 0:
         return np.empty((0, 1), dtype=np.float64)
@@ -104,42 +96,111 @@ def _safe_name(name: str) -> str:
     return cleaned[:63]
 
 
-def _add_numeric(prefix: str, value: Any, payload: dict[str, np.ndarray]) -> None:
-    """Flatten nested numeric content into individual MATLAB double variables."""
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (bool, int, float, np.number))
 
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            child = _safe_name(f"{prefix}_{key}" if prefix else str(key))
-            _add_numeric(child, item, payload)
+
+def _add_scalar_mapping(
+    prefix: str,
+    mapping: Mapping[str, Any],
+    payload: dict[str, np.ndarray],
+) -> None:
+    """Flatten only compact numeric scalars/arrays from a mapping."""
+    for key, value in mapping.items():
+        name = _safe_name(f"{prefix}_{key}" if prefix else str(key))
+        if _is_number(value):
+            payload.setdefault(name, _double_scalar(value))
+        elif isinstance(value, np.ndarray):
+            try:
+                array = np.asarray(value, dtype=np.float64)
+            except (TypeError, ValueError):
+                continue
+            if array.ndim == 0:
+                payload.setdefault(name, _double_scalar(array.item()))
+            elif array.ndim == 1:
+                payload.setdefault(name, _double_vector(array))
+            else:
+                payload.setdefault(name, array)
+        elif isinstance(value, Mapping):
+            _add_scalar_mapping(name, value, payload)
+        elif isinstance(value, (list, tuple)) and value:
+            try:
+                array = np.asarray(value, dtype=np.float64)
+            except (TypeError, ValueError):
+                continue
+            if array.ndim <= 1:
+                payload.setdefault(name, _double_vector(array))
+            else:
+                payload.setdefault(name, array)
+
+
+def _add_record_arrays(
+    prefix: str,
+    records: Sequence[Any],
+    payload: dict[str, np.ndarray],
+) -> None:
+    """Store a list of records column-wise instead of one variable per record."""
+    rows = [row for row in records if isinstance(row, Mapping)]
+    if not rows:
         return
-    if isinstance(value, np.ndarray):
+    keys = sorted({str(key) for row in rows for key in row.keys()})
+    for key in keys:
+        values = [row.get(key) for row in rows]
+        name = _safe_name(f"{prefix}_{key}")
+        if all(value is None or _is_number(value) for value in values):
+            if any(_is_number(value) for value in values):
+                payload.setdefault(
+                    name,
+                    _double_vector(
+                        [np.nan if value is None else float(value) for value in values]
+                    ),
+                )
+            continue
+
+        converted: list[np.ndarray] = []
+        shape: tuple[int, ...] | None = None
+        valid = True
+        for value in values:
+            if value is None:
+                valid = False
+                break
+            try:
+                array = np.asarray(value, dtype=np.float64)
+            except (TypeError, ValueError):
+                valid = False
+                break
+            if array.ndim == 0:
+                array = array.reshape(1)
+            if shape is None:
+                shape = array.shape
+            elif array.shape != shape:
+                valid = False
+                break
+            converted.append(array)
+        if valid and converted:
+            stacked = np.stack(converted, axis=0)
+            if stacked.ndim == 2 and stacked.shape[1] == 1:
+                stacked = stacked.reshape(-1, 1)
+            payload.setdefault(name, np.asarray(stacked, dtype=np.float64))
+
+
+def _add_optional_numeric_series(
+    mapping: Mapping[str, Any],
+    excluded: set[str],
+    prefix: str,
+    payload: dict[str, np.ndarray],
+    expected_length: int,
+) -> None:
+    for key, value in mapping.items():
+        if key in excluded:
+            continue
         try:
             array = np.asarray(value, dtype=np.float64)
         except (TypeError, ValueError):
-            return
-        if array.ndim <= 1:
-            payload.setdefault(_safe_name(prefix), _double_vector(array))
-        else:
-            payload.setdefault(_safe_name(prefix), np.asarray(array, dtype=np.float64))
-        return
-    if isinstance(value, (bool, int, float, np.number)):
-        payload.setdefault(_safe_name(prefix), _double_scalar(value))
-        return
-    if isinstance(value, (list, tuple)):
-        if not value:
-            payload.setdefault(_safe_name(prefix), np.empty((0, 1), dtype=np.float64))
-            return
-        try:
-            array = np.asarray(value, dtype=np.float64)
-        except (TypeError, ValueError):
-            for index, item in enumerate(value, start=1):
-                if isinstance(item, (Mapping, list, tuple, np.ndarray)):
-                    _add_numeric(_safe_name(f"{prefix}_{index}"), item, payload)
-            return
-        if array.ndim <= 1:
-            payload.setdefault(_safe_name(prefix), _double_vector(array))
-        else:
-            payload.setdefault(_safe_name(prefix), np.asarray(array, dtype=np.float64))
+            continue
+        if array.ndim != 1 or array.size != expected_length:
+            continue
+        payload.setdefault(_safe_name(f"{prefix}_{key}"), _double_vector(array))
 
 
 def _route_coordinates(route: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -166,6 +227,65 @@ def _route_coordinates(route: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray
     return _double_vector(lat), _double_vector(lon), _double_vector(ele)
 
 
+def _stack_comparison_series(
+    prefix: str,
+    records: Sequence[Any],
+    payload: dict[str, np.ndarray],
+) -> None:
+    """Compact same-shaped numeric comparison data into matrices."""
+    rows = [row for row in records if isinstance(row, Mapping)]
+    if not rows:
+        return
+    payload.setdefault(f"{prefix}_count", _double_scalar(len(rows)))
+
+    parameter_rows = [row.get("parameters", {}) for row in rows]
+    if all(isinstance(item, Mapping) for item in parameter_rows):
+        keys = sorted({str(key) for row in parameter_rows for key in row.keys()})
+        for key in keys:
+            values = [row.get(key) for row in parameter_rows]
+            if all(value is None or _is_number(value) for value in values) and any(
+                _is_number(value) for value in values
+            ):
+                payload.setdefault(
+                    _safe_name(f"{prefix}_param_{key}"),
+                    _double_vector(
+                        [np.nan if value is None else float(value) for value in values]
+                    ),
+                )
+
+    series_paths = {
+        "time_s": ("time", "time_s"),
+        "distance_m": ("time", "distance_m"),
+        "v_kmh": ("time", "speed_kmh"),
+        "v_target_kmh": ("time", "target_kmh"),
+        "a_mps2": ("time", "acceleration_mps2"),
+    }
+    for target, (section, key) in series_paths.items():
+        arrays: list[np.ndarray] = []
+        expected: int | None = None
+        for row in rows:
+            container = row.get(section, {})
+            if not isinstance(container, Mapping):
+                arrays = []
+                break
+            try:
+                array = np.asarray(container.get(key, []), dtype=np.float64).reshape(-1)
+            except (TypeError, ValueError):
+                arrays = []
+                break
+            if expected is None:
+                expected = array.size
+            if array.size != expected:
+                arrays = []
+                break
+            arrays.append(array)
+        if arrays and expected:
+            payload.setdefault(
+                _safe_name(f"{prefix}_{target}"),
+                np.asarray(np.vstack(arrays), dtype=np.float64),
+            )
+
+
 def export_matlab_simulation(
     result: Mapping[str, Any],
     output_path: str | Path,
@@ -178,16 +298,8 @@ def export_matlab_simulation(
     source_dem: str | Path | None = None,
     comparison: Mapping[str, Any] | None = None,
 ) -> Path:
-    """Export the simulation directly from Python as individual MATLAB doubles.
-
-    Every top-level variable in the resulting MAT file is numeric float64. No
-    MATLAB process, structs, cells, strings, JSON, tables or timetables are used.
-    Time-aligned signals use compact names; route-aligned originals use the
-    ``route_`` prefix. Numeric parameters, summaries and comparison data are
-    flattened into additional individual double variables.
-    """
-
-    del source_route, source_dem  # textual metadata is intentionally not exported
+    """Export a compact MAT file made only of named MATLAB double arrays."""
+    del source_route, source_dem
 
     path = Path(output_path).expanduser().resolve()
     if path.suffix.lower() != ".mat":
@@ -218,7 +330,6 @@ def export_matlab_simulation(
     route_grade_pct = route_grade_fraction * 100.0
 
     payload: dict[str, np.ndarray] = {
-        # Time-aligned core signals. These are the primary MATLAB analysis arrays.
         "time_s": time_s,
         "distance_m": time_distance,
         "lat_deg": _interp_finite(route_distance, route_lat, time_distance),
@@ -250,7 +361,6 @@ def export_matlab_simulation(
         "v_noise_kmh": _interp_finite(
             route_distance, _double_vector(distance_data.get("noise_kmh", []), n_route), time_distance
         ),
-        # Original distance-aligned route data.
         "route_distance_m": route_distance,
         "route_lat_deg": route_lat,
         "route_lon_deg": route_lon,
@@ -265,6 +375,15 @@ def export_matlab_simulation(
         "route_v_actual_kmh": _double_vector(distance_data.get("actual_speed_kmh", []), n_route),
         "route_v_noise_kmh": _double_vector(distance_data.get("noise_kmh", []), n_route),
     }
+
+    distance_core = {
+        "distance_m", "latitude", "longitude", "curve_radius_m",
+        "road_limit_kmh", "surface_limit_kmh", "curve_limit_kmh",
+        "base_target_kmh", "planned_speed_kmh", "actual_speed_kmh", "noise_kmh",
+    }
+    time_core = {"time_s", "distance_m", "speed_kmh", "target_kmh", "acceleration_mps2"}
+    _add_optional_numeric_series(distance_data, distance_core, "route", payload, n_route)
+    _add_optional_numeric_series(time_data, time_core, "time", payload, n_time)
 
     power_names = {
         "total_kw": "p_total_kw",
@@ -282,12 +401,19 @@ def export_matlab_simulation(
     for source, target in power_names.items():
         payload[target] = _double_vector(power.get(source, []), n_time)
 
-    payload["e_traction_kwh"] = _double_scalar(power.get("traction_energy_kwh", np.nan))
-    payload["e_recuperation_kwh"] = _double_scalar(power.get("recuperation_energy_kwh", np.nan))
-    payload["e_net_kwh"] = _double_scalar(power.get("net_energy_kwh", np.nan))
+    scalar_power_names = {
+        "traction_energy_kwh": "e_traction_kwh",
+        "recuperation_energy_kwh": "e_recuperation_kwh",
+        "net_energy_kwh": "e_net_kwh",
+        "braking_energy_kwh": "e_braking_kwh",
+        "p95_positive_kw": "p_p95_positive_kw",
+        "maximum_kw": "p_max_kw",
+        "minimum_kw": "p_min_kw",
+    }
+    for source, target in scalar_power_names.items():
+        payload[target] = _double_scalar(power.get(source, np.nan))
     payload["trailer_enabled"] = _double_scalar(1.0 if power.get("trailer_enabled", False) else 0.0)
 
-    # OSM traffic-light events and simulated dwell intervals.
     traffic_dist: list[float] = []
     traffic_dwell: list[float] = []
     if isinstance(events, Mapping):
@@ -315,6 +441,29 @@ def export_matlab_simulation(
     payload["traffic_light_start_s"] = _double_vector(interval_start)
     payload["traffic_light_end_s"] = _double_vector(interval_end)
 
+    if isinstance(events, Mapping):
+        for key, value in events.items():
+            if key in {"traffic_lights", "traffic_light_dwell_intervals_s"}:
+                continue
+            prefix = {
+                "post_curve_overshoot": "post_curve",
+                "overtaking": "overtaking",
+            }.get(str(key), _safe_name(f"event_{key}"))
+            if isinstance(value, (list, tuple)) and value and all(
+                isinstance(item, Mapping) for item in value
+            ):
+                _add_record_arrays(prefix, value, payload)
+            elif isinstance(value, Mapping):
+                _add_scalar_mapping(prefix, value, payload)
+            elif isinstance(value, (list, tuple, np.ndarray)):
+                try:
+                    array = np.asarray(value, dtype=np.float64)
+                except (TypeError, ValueError):
+                    continue
+                payload.setdefault(prefix, array if array.ndim > 1 else _double_vector(array))
+            elif _is_number(value):
+                payload.setdefault(prefix, _double_scalar(value))
+
     total_power = payload["p_total_kw"]
     if np.any(np.isfinite(total_power)):
         collective = cumulative_load_curve(_flat(time_s), _flat(total_power))
@@ -328,35 +477,55 @@ def export_matlab_simulation(
             )
             payload["load_neg_kw"] = _double_vector(collective.get("negative_load", []))
 
-    # Original route coordinates are kept separately from the resampled route arrays.
     if isinstance(route, Mapping):
         coord_lat, coord_lon, coord_ele = _route_coordinates(route)
         payload["route_coordinate_lat_deg"] = coord_lat
         payload["route_coordinate_lon_deg"] = coord_lon
         payload["route_coordinate_elevation_m"] = coord_ele
-        _add_numeric("route_extra", route, payload)
+
+        for key, value in route.items():
+            if key == "coordinates":
+                continue
+            prefix = {
+                "segments": "segment",
+                "traffic_signals": "osm_signal",
+                "legs": "leg",
+                "metadata": "route_meta",
+                "selection": "route_selection",
+                "summary": "route_summary",
+            }.get(str(key), _safe_name(f"route_{key}"))
+            if isinstance(value, (list, tuple)) and value and all(
+                isinstance(item, Mapping) for item in value
+            ):
+                _add_record_arrays(prefix, value, payload)
+            elif isinstance(value, Mapping):
+                _add_scalar_mapping(prefix, value, payload)
+            elif _is_number(value):
+                payload.setdefault(prefix, _double_scalar(value))
 
     parameter_mapping = parameters if isinstance(parameters, Mapping) else result.get("parameters", {})
     if isinstance(parameter_mapping, Mapping):
-        _add_numeric("param", parameter_mapping, payload)
+        _add_scalar_mapping("param", parameter_mapping, payload)
 
     summary = result.get("summary", {})
     if isinstance(summary, Mapping):
-        _add_numeric("summary", summary, payload)
+        _add_scalar_mapping("summary", summary, payload)
 
-    # Retain any additional numeric simulation/event/comparison values not already
-    # represented by the concise variables above. Non-numeric text is deliberately
-    # omitted so every MAT workspace variable remains MATLAB class double.
-    _add_numeric("extra_distance", distance_data, payload)
-    _add_numeric("extra_time", time_data, payload)
-    if isinstance(events, Mapping):
-        _add_numeric("event", events, payload)
-    if isinstance(power, Mapping):
-        _add_numeric("power_extra", power, payload)
     if isinstance(comparison, Mapping):
-        _add_numeric("comparison", comparison, payload)
+        results = comparison.get("results", [])
+        if isinstance(results, (list, tuple)):
+            _stack_comparison_series("comparison", results, payload)
+        configs = comparison.get("configs", [])
+        if isinstance(configs, (list, tuple)) and configs and all(
+            isinstance(item, Mapping) for item in configs
+        ):
+            _add_record_arrays("comparison_config", configs, payload)
+        resistance = comparison.get("resistance", [])
+        if isinstance(resistance, (list, tuple)) and resistance and all(
+            isinstance(item, Mapping) for item in resistance
+        ):
+            _add_record_arrays("comparison_power", resistance, payload)
 
-    # Enforce the contract: every exported top-level variable is float64.
     for key, value in list(payload.items()):
         array = np.asarray(value, dtype=np.float64)
         if array.ndim == 0:
