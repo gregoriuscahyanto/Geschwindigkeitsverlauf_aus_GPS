@@ -94,13 +94,13 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
             if "exportieren" in button.text().lower():
                 button.setText("MAT exportieren")
                 button.setToolTip(
-                    "Eine MATLAB-.mat direkt mit nativen table/timetable-Variablen erzeugen, "
-                    "inklusive Route, Kurvenradius, Höhenprofil, Leistung und Energie."
+                    "Eine MATLAB-.mat erzeugen, die ausschließlich native table/timetable-"
+                    "Variablen enthält – inklusive Route, Kurvenradius, Höhenprofil, Leistung und Energie."
                 )
 
     @staticmethod
     def _mat_exporter():
-        """Load the SciPy-based raw MAT writer only when the user exports."""
+        """Load the SciPy-based staging writer only when the user exports."""
         try:
             from .mat_export import export_matlab_simulation
         except ImportError as package_error:
@@ -116,7 +116,7 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
         return export_matlab_simulation
 
     def export_result(self) -> None:
-        """Export one MAT file containing native MATLAB tables/timetables."""
+        """Export one MAT file containing only native MATLAB tables/timetables."""
         if self._result is None:
             QMessageBox.information(
                 self,
@@ -152,10 +152,9 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
                 "resistance": getattr(self, "_comparison_resistance", []),
             }
 
-            # SciPy creates a complete portable staging MAT. MATLAB itself is
-            # then called non-interactively to turn the numeric matrices into
-            # native table/timetable class objects in the final MAT file. The
-            # temporary staging file is removed automatically afterwards.
+            # SciPy writes a temporary staging MAT only. MATLAB then constructs
+            # the native table/timetable objects. Raw matrices/structs are not
+            # copied into the final file and the staging directory is removed.
             with tempfile.TemporaryDirectory(prefix="gps-routenplaner-mat-") as temporary:
                 raw_path = Path(temporary) / "raw_export.mat"
                 export_matlab_simulation(
@@ -179,8 +178,9 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
             self,
             "MATLAB-Export fertig",
             f"Gespeichert:\n{mat_path}\n\n"
-            "Nach load(...) enthält die Datei direkt distanceTable, driveTable, "
-            "driveTimetable, powerTimetable, trafficLightTable und routeCoordinateTable."
+            "Die finale Datei enthält ausschließlich table/timetable-Variablen, u. a. "
+            "distanceTable, driveTimetable, powerTimetable, loadCollectiveTable, "
+            "parametersTable und summaryTable."
         )
 
 
