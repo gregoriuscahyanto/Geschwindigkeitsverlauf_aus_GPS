@@ -26,19 +26,19 @@ try:
         CompleteApplicationWindow as _BaseWindow,
         cached_dataset,
     )
-    from .gpx_import import build_route_from_gpx
+    from .gpx_import import build_route_from_gpx, parse_gpx_track
     from .runtime_paths import data_dir, prepare_runtime_directories, route_result_path, state_dir
     from .ui_theme import apply_readable_light_theme
 except ImportError:
     from complete_app_base import *  # type: ignore  # noqa: F401,F403
     from complete_app_base import DATASETS, CompleteApplicationWindow as _BaseWindow, cached_dataset
-    from gpx_import import build_route_from_gpx
+    from gpx_import import build_route_from_gpx, parse_gpx_track
     from runtime_paths import data_dir, prepare_runtime_directories, route_result_path, state_dir
     from ui_theme import apply_readable_light_theme
 
 
 class GpxImportWorker(QObject):
-    """Match one external GPX track to the already active local OSM dataset."""
+    """Match one external GPX track to the automatically selected local OSM dataset."""
 
     progress = Signal(str, int)
     finished = Signal("QVariantMap")
@@ -71,6 +71,9 @@ class CompleteApplicationWindow(_BaseWindow):
         self._gpx_thread: QThread | None = None
         self._gpx_worker: GpxImportWorker | None = None
         self._gpx_route_has_elevation = False
+        self._pending_gpx_path = ""
+        self._pending_gpx_coordinates: list[dict[str, float]] = []
+        self._setting_gpx_endpoints = False
         super().__init__(*args, **kwargs)
         # The legacy base class historically used ``Path.cwd() / 'data'``.
         # Override it before its zero-delay restore callback runs so all OSM,
@@ -117,15 +120,16 @@ class CompleteApplicationWindow(_BaseWindow):
         region_caption = QLabel("Gebiet:")
         region_caption.setStyleSheet("font-weight:600;")
         header.addWidget(region_caption)
-        self.detected_region_label = QLabel("Noch nicht bestimmt – Start und Ziel anklicken")
+        self.detected_region_label = QLabel("Noch nicht bestimmt – GPX importieren oder Punkte anklicken")
         self.detected_region_label.setStyleSheet("font-weight:600;")
         self.detected_region_label.setWordWrap(True)
         header.addWidget(self.detected_region_label, 1)
         group_layout.addLayout(header)
 
         self.data_status = QLabel(
-            "Start und Ziel setzen. Die App erkennt das passende Gebiet automatisch. "
-            "Anschließend die von GraphHopper exportierte GPX als fertige Route importieren."
+            "GraphHopper-GPX kann direkt importiert werden. Die App liest Start/Ziel und Track, "
+            "erkennt daraus automatisch das Gebiet und aktiviert die passenden lokalen OSM-Daten. "
+            "Alternativ können Start/Ziel weiterhin auf der Karte gesetzt werden."
         )
         self.data_status.setWordWrap(True)
         self.data_status.setStyleSheet("color:palette(mid);")
@@ -140,8 +144,9 @@ class CompleteApplicationWindow(_BaseWindow):
 
         self.gpx_import_button = QPushButton("GraphHopper-GPX importieren")
         self.gpx_import_button.setToolTip(
-            "Die GraphHopper-GPX-Geometrie wird unverändert übernommen und mit dem "
-            "aktiven lokalen OSM-GPKG für Tempolimits, Straßentypen und Ampeln abgeglichen."
+            "Die GPX kann direkt ohne vorherige Punktauswahl importiert werden. Das Gebiet wird "
+            "aus dem Track erkannt; anschließend wird die GPX-Geometrie unverändert mit dem "
+            "passenden lokalen OSM-GPKG für Tempolimits, Straßentypen und Ampeln abgeglichen."
         )
         self.gpx_import_button.clicked.connect(self._choose_gpx_route)
         group_layout.addWidget(self.gpx_import_button)
@@ -182,31 +187,44 @@ class CompleteApplicationWindow(_BaseWindow):
             return
         ready = (
             self._gpx_thread is None
+            and getattr(self, "_region_thread", None) is None
+            and getattr(self, "_data_thread", None) is None
             and not bool(selector.busy)
-            and int(selector.pointCount) >= 2
-            and bool(str(selector.roadsFile or "").strip())
         )
         button.setEnabled(ready)
 
+    def _set_selection_from_gpx(self, coordinates: list[dict[str, float]]) -> None:
+        """Show GPX start/target markers without triggering a second region detection."""
+        if len(coordinates) < 2:
+            return
+        first = coordinates[0]
+        last = coordinates[-1]
+        points = [
+            (float(first["latitude"]), float(first["longitude"])),
+            (float(last["latitude"]), float(last["longitude"])),
+        ]
+        selector = self.route_selector
+        self._setting_gpx_endpoints = True
+        try:
+            selector.points = points
+            selector.current_bbox = selector.bbox_for_points(points)
+            selector._clear_route_display()
+            selector._update_point_models()
+        finally:
+            self._setting_gpx_endpoints = False
+
+    def _selection_changed(self, data: dict[str, Any]) -> None:
+        if self._setting_gpx_endpoints:
+            return
+        super()._selection_changed(data)
+
     @Slot()
     def _choose_gpx_route(self) -> None:
-        if self._gpx_thread is not None:
-            return
-        selector = self.route_selector
-        if int(selector.pointCount) < 2:
-            QMessageBox.information(
-                self,
-                "GPX importieren",
-                "Zuerst Start und Ziel setzen, damit das passende lokale OSM-Gebiet automatisch aktiviert wird.",
-            )
-            return
-        roads_file = str(selector.roadsFile or "").strip()
-        if not roads_file or not Path(roads_file).is_file():
-            QMessageBox.information(
-                self,
-                "GPX importieren",
-                "Die lokalen Routingdaten für das erkannte Gebiet sind noch nicht bereit.",
-            )
+        if (
+            self._gpx_thread is not None
+            or self._region_thread is not None
+            or self._data_thread is not None
+        ):
             return
 
         selected, _ = QFileDialog.getOpenFileName(
@@ -218,13 +236,51 @@ class CompleteApplicationWindow(_BaseWindow):
         if not selected:
             return
 
+        try:
+            parsed = parse_gpx_track(selected)
+            coordinates = list(parsed.get("coordinates", []))
+        except Exception as exc:
+            QMessageBox.critical(self, "GPX-Import fehlgeschlagen", str(exc))
+            return
+        if len(coordinates) < 2:
+            QMessageBox.critical(
+                self,
+                "GPX-Import fehlgeschlagen",
+                "Die GPX enthält weniger als zwei gültige Trackpunkte.",
+            )
+            return
+
+        self._pending_gpx_path = str(Path(selected).resolve())
+        self._pending_gpx_coordinates = coordinates
+        self._set_selection_from_gpx(coordinates)
+        self.data_progress.setRange(0, 100)
+        self.data_progress.setValue(0)
+        self.detected_region_label.setText("wird aus der GPX ermittelt …")
+        self.data_status.setText(
+            f"GPX gelesen: {len(coordinates)} Trackpunkte. "
+            "Ermittle daraus automatisch das passende lokale OSM-Gebiet …"
+        )
+        self._update_gpx_import_button()
+        self._start_region_detection(coordinates)
+
+    def _maybe_start_pending_gpx_import(self) -> None:
+        if not self._pending_gpx_path or self._gpx_thread is not None:
+            return
+        roads_file = str(self.route_selector.roadsFile or "").strip()
+        if not roads_file or not Path(roads_file).is_file():
+            return
+
+        gpx_path = self._pending_gpx_path
+        self._pending_gpx_path = ""
+        self._pending_gpx_coordinates = []
         self.data_progress.setRange(0, 100)
         self.data_progress.setValue(0)
         self.data_status.setText(
-            "GraphHopper-GPX wird eingelesen und mit den lokalen OSM-Straßen abgeglichen …"
+            "Passendes Gebiet ist aktiv. GraphHopper-GPX wird jetzt mit den lokalen "
+            "OSM-Straßen abgeglichen …"
         )
         thread = QThread(self)
-        worker = GpxImportWorker(roads_file, selected)
+        worker = GpxImportWorker(roads_file, gpx_path)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self._gpx_progress_changed)
@@ -320,6 +376,11 @@ class CompleteApplicationWindow(_BaseWindow):
         selector.selectionChanged.emit(selector._selection_payload())
         self._refresh_coverage_if_ready()
 
+    def _activate_prepared_data(self, result: dict[str, Any], *, restored: bool = False) -> None:
+        super()._activate_prepared_data(result, restored=restored)
+        if self._pending_gpx_path:
+            QTimer.singleShot(0, self._maybe_start_pending_gpx_import)
+
     def _region_detected(self, dataset_key: str) -> None:
         """Switch datasets safely instead of retaining an unrelated old GPKG."""
         if dataset_key in DATASETS:
@@ -327,6 +388,12 @@ class CompleteApplicationWindow(_BaseWindow):
             if cached is None and self._active_dataset_key != dataset_key:
                 self._clear_stale_automatic_routing_data()
         super()._region_detected(dataset_key)
+
+    def _region_failed(self, message: str) -> None:
+        self._pending_gpx_path = ""
+        self._pending_gpx_coordinates = []
+        super()._region_failed(message)
+        self._update_gpx_import_button()
 
     def _start_dataset_preparation(self, dataset_key: str, *, confirm_large: bool) -> None:
         """Use a country-specific confirmation instead of calling every fallback DACH."""
@@ -342,30 +409,25 @@ class CompleteApplicationWindow(_BaseWindow):
         if dataset_key == "dach":
             title = "Großer grenzüberschreitender Datensatz"
             question = (
-                "Die gewählten Punkte liegen in mehr als einem DACH-Land. Für eine durchgehende "
-                "Route benötigt die App deshalb den gemeinsamen DACH-Datensatz (Deutschland, "
-                "Österreich, Schweiz). Dieser Download ist mehrere GB groß, wird aber nur einmal "
-                "benötigt und danach lokal als GPKG wiederverwendet.\n\n"
+                "Die GPX bzw. gewählten Punkte liegen in mehr als einem DACH-Land. Für eine "
+                "durchgehende Auswertung benötigt die App deshalb den gemeinsamen DACH-Datensatz "
+                "(Deutschland, Österreich, Schweiz). Dieser Download ist mehrere GB groß, wird "
+                "aber nur einmal benötigt und danach lokal als GPKG wiederverwendet.\n\n"
                 "DACH jetzt automatisch herunterladen und vorbereiten?"
             )
             declined = (
-                "Grenzroute erkannt, aber DACH wurde nicht vorbereitet. Die Punkte bleiben "
-                "erhalten; ändere einen Punkt, um die Automatik erneut zu starten."
+                "Grenzroute erkannt, aber DACH wurde nicht vorbereitet."
             )
         elif dataset_key == "germany":
             title = "Großer Deutschland-Datensatz"
             question = (
-                "Die gewählten Punkte liegen innerhalb Deutschlands, aber nicht gemeinsam in "
-                "einem kleineren unterstützten Regionalextrakt. Deshalb wird Deutschland (gesamt) "
-                "benötigt. Dieser Download ist mehrere GB groß, wird aber nur einmal benötigt und "
-                "danach lokal als GPKG wiederverwendet.\n\n"
+                "Die GPX bzw. gewählten Punkte liegen innerhalb Deutschlands, aber nicht gemeinsam "
+                "in einem kleineren Regionalextrakt. Deshalb wird Deutschland (gesamt) benötigt. "
+                "Dieser Download ist mehrere GB groß, wird aber nur einmal benötigt und danach "
+                "lokal als GPKG wiederverwendet.\n\n"
                 "Deutschland jetzt automatisch herunterladen und vorbereiten?"
             )
-            declined = (
-                "Deutschland wurde erkannt, aber der große Deutschland-Datensatz wurde nicht "
-                "vorbereitet. Die Punkte bleiben erhalten; ändere einen Punkt, um die Automatik "
-                "erneut zu starten."
-            )
+            declined = "Deutschland wurde erkannt, aber der große Datensatz wurde nicht vorbereitet."
         else:
             title = "Großer Routingdatensatz"
             question = (
@@ -382,8 +444,11 @@ class CompleteApplicationWindow(_BaseWindow):
             QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
+            self._pending_gpx_path = ""
+            self._pending_gpx_coordinates = []
             self.data_status.setText(declined)
             self.data_progress.setValue(0)
+            self._update_gpx_import_button()
             return
 
         super()._start_dataset_preparation(dataset_key, confirm_large=False)
