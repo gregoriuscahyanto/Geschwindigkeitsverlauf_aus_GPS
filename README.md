@@ -1,16 +1,12 @@
 # Geschwindigkeitsverlauf aus OSM-Routen
 
-Lokale Windows-Desktopanwendung zur Routenplanung mit OpenStreetMap-Daten und zur Simulation eines Geschwindigkeits-, Beschleunigungs-, Höhen-, Leistungs- und Energieverlaufs entlang einer realen Straßenroute.
+Lokale Windows-Desktopanwendung zur Routenplanung mit OpenStreetMap-Daten und zur Simulation von Geschwindigkeits-, Beschleunigungs-, Höhen-, Leistungs- und Energieverläufen entlang realer Straßenrouten.
 
-Die Anwendung verbindet **Geodaten, Routing und Fahrdynamik** in einem gemeinsamen Werkzeug. Aus einer vom Benutzer gewählten Route werden Straßeninformationen, Höhenverlauf und erkannte Verkehrselemente aufbereitet. Darauf aufbauend kann untersucht werden, wie unterschiedliche Fahrer-, Fahrzeug- und Umgebungsparameter den zeitlichen Fahrverlauf sowie die resultierenden Radleistungen und Energien beeinflussen.
+Die Anwendung verbindet **Geodaten, Routing und Fahrdynamik** in einem Werkzeug. Start, Ziel und optionale Zwischenpunkte werden auf der Karte gewählt. Daraus werden lokale OSM-Routingdaten, Straßenattribute, Kurven, reale OSM-Ampeln und ein Höhenprofil aufbereitet. Anschließend können Fahrer- und Fahrzeugparameter verändert und die resultierenden Fahr- und Leistungsprofile verglichen werden.
 
-Die Anwendung läuft vollständig lokal in Python/PySide6. Es ist kein Java, Docker, lokaler Server oder Adminzugriff erforderlich.
+Die Anwendung läuft lokal mit **Python 3.11 / PySide6**. Java, Docker, ein lokaler Server und Adminrechte sind nicht erforderlich.
 
-## Worum geht es bei dem Projekt?
-
-Eine reine GPS- oder OSM-Route beschreibt zunächst hauptsächlich **wo** ein Fahrzeug fährt. Für viele technische Fragestellungen ist jedoch zusätzlich interessant, **wie** diese Strecke voraussichtlich gefahren wird: Wo wird beschleunigt oder gebremst? Welche Geschwindigkeiten sind aufgrund von Straßenlimit, Kurven oder Verkehrselementen plausibel? Wie wirken Steigungen und Gefälle? Welche Radleistung wird dabei benötigt und wie verändert sich der Energiebedarf?
-
-Dieses Projekt bildet die Verbindung zwischen diesen beiden Ebenen:
+## Typischer Ablauf
 
 ```text
 Start / Ziel / Wegpunkte
@@ -28,248 +24,206 @@ Geschwindigkeit / Beschleunigung
 Radleistung / Energie / Lastkollektiv
 ```
 
-Das Ergebnis ist kein einzelner statischer Fahrzyklus, sondern ein **parametrierbares Simulationswerkzeug**, mit dem dieselbe reale Route unter unterschiedlichen Annahmen betrachtet und verglichen werden kann.
+## Installation unter Windows
 
-## Hintergrund und Motivation
+Benötigt wird **Python 3.11 (64 Bit)**.
 
-Für Simulationen von Fahrzeugen oder Antrieben werden häufig Geschwindigkeitsprofile benötigt. Standardisierte Fahrzyklen sind gut vergleichbar, bilden aber eine konkrete reale Straße mit ihren Kurven, Geschwindigkeitsbeschränkungen, Steigungen und Verkehrselementen nur eingeschränkt ab.
+Der empfohlene Weg ist ab jetzt immer über die `.cmd`-Dateien im Projektroot. Dadurch muss die PowerShell-Ausführungsrichtlinie nicht manuell geändert werden.
 
-Umgekehrt liefern Routing- und Kartendaten zwar eine reale Strecke, aber normalerweise noch keinen technisch nutzbaren Geschwindigkeits- und Lastverlauf.
-
-Die Anwendung soll diese Lücke schließen. Sie erzeugt aus frei gewählten OSM-Routen eine reproduzierbare Grundlage für Fahrverlaufs- und Lastsimulationen, ohne dass für jede Strecke zunächst eine reale Messfahrt erforderlich ist.
-
-Dabei liegt der Schwerpunkt bewusst auf einer **lokalen, nachvollziehbaren und veränderbaren Simulation**. Die verwendeten Fahrerprofile sind technische Modellszenarien. Sie sind keine empirischen Aussagen über reale Personengruppen.
-
-## Welche Problemstellungen kann die Anwendung adressieren?
-
-### 1. Von einer realen Route zu einem Geschwindigkeitsprofil
-
-Eine Liniengeometrie allein reicht für viele Fahrzeugberechnungen nicht aus. Die Anwendung kombiniert unter anderem Straßenlimits, Kurvengeometrie, Fahrerparameter, Beschleunigungs- und Bremsgrenzen sowie erkannte OSM-Verkehrssignale zu einem zeitabhängigen Fahrverlauf.
-
-Damit kann beispielsweise untersucht werden, wie sich eine reale Landstraßen-, Stadt- oder Autobahnroute dynamisch von einem standardisierten Fahrzyklus unterscheidet.
-
-### 2. Vergleich unterschiedlicher Fahrweisen
-
-Dieselbe Strecke kann mit unterschiedlichen Fahrerparametern simuliert werden. Dadurch lassen sich beispielsweise Auswirkungen von
-
-- gewünschter Reisegeschwindigkeit,
-- Beschleunigungs- und Bremsverhalten,
-- Kurvendynamik,
-- Geschwindigkeitsabweichungen,
-- Fahrerrauschen,
-- Verhalten nach Kurven oder
-- optionalen Überholmanövern
-
-auf Fahrzeit, Geschwindigkeit, Beschleunigung und Belastung vergleichen.
-
-Die mitgelieferten Presets dienen dabei als technische Ausgangspunkte und können vollständig angepasst werden.
-
-### 3. Einfluss von Fahrzeug- und Anhängerparametern
-
-Aus Geschwindigkeit, Beschleunigung und Höhenprofil wird die Radleistung aufgeteilt in Beiträge für
-
-- Beschleunigung,
-- Steigung bzw. Gefälle,
-- Rollwiderstand,
-- Luftwiderstand und
-- optional einen Anhänger.
-
-Damit können Parameterstudien durchgeführt werden, zum Beispiel zum Einfluss von Fahrzeugmasse, Luftwiderstand, Rollwiderstand oder Anhängerbetrieb.
-
-### 4. Abschätzung von Energiebedarf und Rekuperationspotenzial
-
-Durch Integration der Radleistung werden Antriebsenergie, negative Radarbeit bzw. ideales Rekuperationspotenzial und eine Nettoenergie berechnet.
-
-Das ermöglicht insbesondere **relative Vergleiche** zwischen Routen, Fahrweisen oder Fahrzeugparametern. Die aktuelle Energiebilanz ist bewusst ein Radleistungsmodell und noch kein vollständiges Batterie-, Motor- oder Wirkungsgradmodell.
-
-### 5. Analyse von Steigungen und topografischem Einfluss
-
-Das Höhenprofil wird automatisch aus Geländedaten ergänzt. Dadurch lässt sich sichtbar machen, welchen Einfluss Steigungen und Gefälle auf Geschwindigkeit, Radleistung und Energie haben.
-
-Das ist beispielsweise für Gebirgsstrecken oder längere Überlandfahrten relevant, bei denen reine 2D-Routingdaten die Belastung nur unvollständig beschreiben würden.
-
-### 6. Erzeugung von Lastkollektiven aus realen Strecken
-
-Aus dem simulierten Fahrverlauf kann ein kumuliertes Lastkollektiv der Radleistung erzeugt werden. Positive und negative Leistungsanteile werden getrennt dargestellt.
-
-Damit kann eine Route nicht nur als zeitlicher Verlauf betrachtet werden, sondern auch hinsichtlich der Häufigkeit und Dauer unterschiedlicher Leistungsniveaus.
-
-### 7. Reproduzierbare Simulation ohne Messfahrt
-
-Für frühe Entwicklungs- oder Konzeptphasen existiert häufig noch kein Messfahrzeug oder keine aufgezeichnete GPS-Fahrt. Mit der Anwendung können trotzdem reale Straßenverläufe als Grundlage für erste Simulationen verwendet werden.
-
-Eine reale Messung wird dadurch nicht grundsätzlich ersetzt. Das Werkzeug eignet sich vielmehr dazu, Varianten vorzubereiten, Hypothesen zu untersuchen und relevante Strecken oder Parameter für spätere Messungen einzugrenzen.
-
-### 8. Lokale Arbeit mit großen Geodaten
-
-OSM-, Routing- und Höhendaten werden lokal gecacht. Nach der Vorbereitung eines Gebiets können Routing und Simulation weitgehend mit den lokalen Daten durchgeführt werden.
-
-Das ist besonders nützlich, wenn große Datensätze nicht bei jedem Programmstart erneut geladen werden sollen oder wenn mit reproduzierbaren Datenständen gearbeitet werden soll.
-
-## Typische Anwendungsfälle
-
-Die Anwendung kann beispielsweise als Grundlage dienen für:
-
-- virtuelle Fahrzyklus-Erzeugung auf frei gewählten realen Routen,
-- Vergleich von Fahrer- und Fahrzeugparametern,
-- Abschätzung von Radleistungs- und Energieverläufen,
-- Untersuchung von Gebirgs-, Stadt-, Landstraßen- und Autobahnstrecken,
-- Vorauswahl interessanter Strecken für reale Messfahrten,
-- Parameterstudien für Fahrzeug- oder Anhängerkonzepte,
-- Erzeugung von Lastkollektiven für nachgelagerte Berechnungen,
-- Plausibilitäts- und Sensitivitätsanalysen sowie
-- Lehre, Forschung und prototypische Entwicklungsarbeiten rund um Fahrzeug-, Routing- und Geodaten.
-
-## Was die Anwendung bewusst nicht ist
-
-Die Anwendung ist ein technisches Simulations- und Analysewerkzeug und kein sicherheitskritisches Navigationssystem.
-
-Sie berücksichtigt derzeit insbesondere **keine Live-Verkehrslage, keine aktuellen Straßensperrungen und keine garantierte reale Ampelphase**. Ampelpositionen werden ausschließlich aus tatsächlich erkannten OSM-Verkehrssignalen übernommen; es werden keine künstlichen Ampeln erzeugt.
-
-Auch die Energieberechnung ist keine vollständige Fahrzeugverbrauchssimulation: Wirkungsgradkennfelder von Motor, Getriebe, Wechselrichter oder Batterie, Nebenverbraucher, thermische Effekte sowie Rekuperationsgrenzen sind im aktuellen Grundmodell nicht vollständig enthalten.
-
-Das verwendete Höhenmodell beschreibt die Geländeoberfläche. Dadurch können Tunnel und Brücken lokal ein falsches Fahrbahnhöhenniveau erhalten. Ergebnisse auf entsprechenden Strecken müssen daher mit dieser Einschränkung interpretiert werden.
-
-## Typischer Workflow
-
-1. Start, Ziel und optional Zwischenpunkte auf der Karte setzen.
-2. Die Anwendung erkennt automatisch das passende OSM-Datengebiet.
-3. Vorhandene Routingdaten werden verwendet; fehlende Daten werden bei Bedarf vorbereitet.
-4. Die Route wird lokal berechnet.
-5. Benötigte Höhendaten werden automatisch ergänzt.
-6. Im Simulations-Tab Fahrer- und Fahrzeugparameter wählen oder verändern.
-7. Geschwindigkeits-, Beschleunigungs-, Höhen-, Leistungs- und Energieverläufe analysieren.
-8. Optional Varianten vergleichen, Lastkollektive betrachten und Ergebnisse exportieren.
-
-## Installation / Einrichtung unter Windows
-
-Die Anwendung benötigt **Python 3.11 (64 Bit)**. Adminrechte sind nicht erforderlich. Das Setup legt eine lokale `.venv` im Projektordner an.
-
-Normale Einrichtung:
-
-```powershell
-.\scripts\setup_windows.ps1
-```
-
-Danach starten:
-
-```powershell
-& ".\.venv\Scripts\python.exe" -m qt_route_selector
-```
-
-### Enterprise-PC ohne Internet / hinter Firewall
-
-Der Enterprise-PC braucht nur **Python 3.11 (64 Bit)**. Alle Python-Pakete sowie OSM-, Routing- und Höhendaten können vorher auf einem anderen Windows-PC vorbereitet und anschließend komplett kopiert werden.
-
-#### 1. Auf einem Windows-PC mit Internet vorbereiten
+### Einrichten
 
 Im Projektordner ausführen:
 
-```powershell
-.\scripts\build_offline_dependencies.ps1
+```cmd
+setup_windows.cmd
 ```
 
-Dadurch entsteht der Ordner:
+Das Setup:
+
+- prüft Python 3.11 / 64 Bit,
+- erstellt die Python-Umgebung,
+- installiert die Abhängigkeiten,
+- verwendet ein vorhandenes `wheelhouse` automatisch offline,
+- prüft bei Offline-Installation das `wheelhouse` auf Vollständigkeit,
+- umgeht Probleme mit deaktiviertem Windows-Long-Path-Support automatisch über kurze Benutzerpfade.
+
+### Starten
+
+```cmd
+start_windows.cmd
+```
+
+Eine Aktivierung der `.venv` ist nicht notwendig.
+
+Auf normalen Windows-Systemen liegt die Umgebung üblicherweise hier:
+
+```text
+<Repository>\.venv\
+```
+
+Wenn Windows Long Paths deaktiviert sind, kann das Setup stattdessen automatisch den kurzen Benutzerpfad verwenden:
+
+```text
+%LOCALAPPDATA%\GPSRP\venv\
+```
+
+`start_windows.cmd` findet die passende Umgebung automatisch.
+
+## Enterprise-PC ohne Internet / hinter Firewall
+
+Der Enterprise-PC benötigt nur **Python 3.11 (64 Bit)**. Python-Pakete sowie OSM-, Routing- und Höhendaten werden vorher auf einem Windows-PC mit Internet vorbereitet und anschließend kopiert.
+
+### 1. Auf dem Internet-PC Python-Pakete vorbereiten
+
+Aktuellen Projektstand holen und im Projektordner ausführen:
+
+```cmd
+build_offline_dependencies.cmd
+```
+
+Dadurch wird der Ordner
 
 ```text
 <Repository>\wheelhouse\
 ```
 
-Er enthält alle Python-Pakete für die Offline-Installation.
+erzeugt. Er enthält die benötigten Windows-x64-Wheels für Python 3.11 sowie eine `MANIFEST.txt`, mit der das Enterprise-Setup prüft, ob das Wheelhouse vollständig und passend zur aktuellen `requirements.txt` ist.
 
-Danach in der Anwendung einmal die Gebiete bzw. Routen vorbereiten, die später auf dem Enterprise-PC benötigt werden. Die bereits heruntergeladenen Daten liegen hier:
+**Wichtig:** Wenn sich `requirements.txt` geändert hat, das Wheelhouse immer neu erzeugen. Nicht einzelne Wheel-Dateien nachträglich zusammenkopieren.
+
+### 2. OSM-, Routing- und Höhendaten vorbereiten
+
+Auf dem Internet-PC die Anwendung starten und die Gebiete bzw. Routen einmal vorbereiten, die später offline benötigt werden.
+
+Die heruntergeladenen und erzeugten Daten liegen standardmäßig hier:
 
 ```text
 %LOCALAPPDATA%\GPS-Routenplaner\data\
 ```
 
-Darin befinden sich je nach vorbereitetem Gebiet unter anderem:
+Darin befinden sich je nach Gebiet unter anderem:
 
 ```text
 OSM-PBF
 POLY
 Routing-GPKG
-Höhendaten / DEM
+Copernicus-/DEM-Höhendaten
 ```
 
-#### 2. Auf den Enterprise-PC kopieren
+Für einen vollständig abgeschotteten Rechner den **kompletten `data`-Ordner** kopieren. Fehlende Gebiete oder DEM-Kacheln würden sonst später einen Download benötigen.
 
-Zwei Dinge kopieren:
+### 3. Auf den Enterprise-PC kopieren
 
-1. den **gesamten Projektordner inklusive `wheelhouse`**
-2. den kompletten Ordner
+Kopiert werden genau zwei Dinge:
+
+1. der **gesamte Projektordner inklusive `wheelhouse`**
+2. der komplette Datenordner
 
 ```text
 %LOCALAPPDATA%\GPS-Routenplaner\data\
 ```
 
-Die `.venv` muss nicht kopiert werden.
+Die `.venv` muss **nicht** mitkopiert werden.
 
-Auf dem Enterprise-PC die Geodaten wieder hier ablegen:
+Auf dem Enterprise-PC die Geodaten wieder unter
 
 ```text
 %LOCALAPPDATA%\GPS-Routenplaner\data\
 ```
 
-Der Zielordner kann bei Bedarf einfach angelegt werden.
+ablegen.
 
-#### 3. Auf dem Enterprise-PC installieren
+### 4. Auf dem Enterprise-PC installieren
 
-PowerShell im kopierten Projektordner öffnen und ausführen:
+Im kopierten Projektordner einfach ausführen:
 
-```powershell
-.\scripts\setup_windows.ps1
+```cmd
+setup_windows.cmd
 ```
 
-Das Setup erkennt das `wheelhouse` automatisch und installiert die Python-Pakete **nur aus den lokalen Dateien**. Für die Installation wird kein Zugriff auf PyPI benötigt.
+Das Setup verwendet das lokale Wheelhouse mit `--no-index`; für die Paketinstallation wird daher kein Zugriff auf PyPI benötigt.
 
-#### 4. Starten
+Falls die Windows-Pfadlängenunterstützung deaktiviert ist, verwendet das Setup automatisch kurze Pfade unter
 
-```powershell
-& ".\.venv\Scripts\python.exe" -m qt_route_selector
+```text
+%LOCALAPPDATA%\GPSRP\
 ```
 
-Damit arbeitet die Anwendung mit den mitkopierten lokalen OSM-, Routing- und Höhendaten.
+für Python-Umgebung und temporäre Installationsdateien. Eine Registry-Änderung oder Adminfreigabe für Windows Long Paths ist dafür nicht erforderlich.
 
-> Wichtig: Für Gebiete, deren PBF-/Routing-/Höhendaten nicht mitkopiert wurden, kann die Anwendung normalerweise einen Download anfordern. Hinter einer Firewall schlägt dieser Download gegebenenfalls fehl. Deshalb alle benötigten Gebiete vorher auf dem Internet-PC vorbereiten und den kompletten `data`-Ordner kopieren.
+### 5. Starten
 
-> Falls die Unternehmensrichtlinie die Ausführung von `pip` selbst verbietet, muss die lokale Installation durch die IT freigegeben oder zentral bereitgestellt werden. Das Offline-Setup verwendet `pip` nur lokal und greift nicht auf das Internet zu.
-
-### Wenn PowerShell die Aktivierung blockiert
-
-Eine Aktivierung der `.venv` ist nicht notwendig. Die Anwendung kann immer direkt gestartet werden:
-
-```powershell
-& ".\.venv\Scripts\python.exe" -m qt_route_selector
+```cmd
+start_windows.cmd
 ```
+
+Das ist auch auf Enterprise-Rechnern der empfohlene Startweg.
+
+> Falls die Unternehmensrichtlinie die Ausführung von `pip` grundsätzlich verbietet, muss die lokale Python-Installation durch die IT freigegeben oder zentral bereitgestellt werden. Das Offline-Setup selbst verwendet `pip` nur mit lokalen Dateien.
 
 ## Anwendung
 
 Die Oberfläche besteht aus drei Tabs:
 
 1. **Route und Karte** – Start, Ziel und Zwischenpunkte wählen. Das passende OSM-Gebiet wird automatisch erkannt; vorhandene lokale Daten werden wiederverwendet und fehlende Routing-/Höhendaten bei Bedarf vorbereitet.
-2. **Geschwindigkeitsverlauf** – Fahrer-/Fahrzeugparameter, kombinierter Analyseplot, Karte, Energiebilanz und kumuliertes Lastkollektiv. Parameter besitzen kontextuelle `(i)`-Hilfen und Änderungen gegenüber dem Preset werden sichtbar markiert.
+2. **Geschwindigkeitsverlauf** – Fahrer-/Fahrzeugparameter, Analyseplot, Karte, Energiebilanz und kumuliertes Lastkollektiv.
 3. **Datenabdeckung** – lokale POLY-, PBF- und Routing-GPKG-Abdeckung ansehen, ohne zusätzliche große Downloads auszulösen.
 
 ### Fahrer und Simulation
 
-Enthalten sind die Presets **Normalo**, **Rennfahrer**, **Handwerker**, **Rentner** und **Rentner + Anhänger**. Die Presets setzen vollständige Fahrerverhaltensparameter; alle Werte können anschließend manuell verändert und auf das Preset zurückgesetzt werden.
+Enthalten sind die Presets **Normalo**, **Rennfahrer**, **Handwerker**, **Rentner** und **Rentner + Anhänger**. Die Presets sind technische Modellszenarien und keine empirischen Aussagen über reale Personengruppen. Alle Werte können verändert und zurückgesetzt werden.
 
-Ampelstopps stammen ausschließlich aus tatsächlich erkannten OSM-Verkehrssignalen. Die Anwendung erzeugt keine synthetischen Ampeln.
+Ampelstopps stammen ausschließlich aus tatsächlich erkannten OSM-Verkehrssignalen. Die Anwendung erzeugt **keine synthetischen Ampeln**.
 
-Die Radleistung berücksichtigt Beschleunigung, Steigung, Rollwiderstand, Luftwiderstand und optional den Anhänger. Angezeigt werden Antriebsenergie, ideale Rekuperationsenergie und Nettoenergie. Die aktuelle Energieberechnung nimmt für die Rekuperation 100 % Wirkungsgrad sowie keine Leistungs- oder Kapazitätsbegrenzung an.
+Die Radleistung berücksichtigt:
 
-## Trennung von Entwicklungsumgebung und Laufzeitdaten
+- Beschleunigung,
+- Steigung bzw. Gefälle,
+- Rollwiderstand,
+- Luftwiderstand,
+- optional einen Anhänger.
 
-Die lokale Python-Umgebung gehört zum Entwicklungs-Checkout und liegt hier:
+Angezeigt werden unter anderem Antriebsenergie, ideales Rekuperationspotenzial und Nettoenergie. Die aktuelle Rekuperationsrechnung nimmt idealisiert 100 % Wirkungsgrad und keine Leistungs- oder Kapazitätsbegrenzung an.
+
+### Rennstrecken
+
+OSM-Rennstrecken mit `highway=raceway`, zum Beispiel die Nürburgring-Nordschleife, werden vom Routing unterstützt. Für Rennstrecken ohne verwertbares OSM-`maxspeed` wird kein künstliches öffentliches Straßenlimit erfunden; das Kurven- und Fahrermodell bestimmt dann den Geschwindigkeitsverlauf.
+
+Wenn sich das Routing-Cache-Format ändert, erzeugt die Anwendung aus der bereits vorhandenen PBF automatisch einen neuen versionierten Routing-GPKG. Die PBF muss dafür nicht erneut heruntergeladen werden.
+
+## MAT-Export
+
+Simulationsergebnisse können direkt aus Python als `.mat` exportiert werden. MATLAB selbst wird für die Erzeugung **nicht** benötigt.
+
+Die Datei enthält kompakte numerische Arrays wie beispielsweise:
 
 ```text
-<Repository>\.venv\
+time_s
+v_kmh
+v_target_kmh
+a_mps2
+distance_m
+elevation_m
+curve_radius_m
+grade_pct
+p_total_kw
 ```
 
-Sie ist per `.gitignore` ausgeschlossen und wird nicht committed.
+Zusätzlich enthält die MAT-Datei den Struct `sim`, der Daten nach Bezugsachse gruppiert, zum Beispiel:
 
-Große bzw. generierte Anwendungsdaten bleiben bewusst **außerhalb** des Repositories. Standardmäßig verwendet die Anwendung unter Windows:
+```matlab
+sim.time.time_s
+sim.time.v_kmh
+sim.route.distance_m
+sim.route.elevation_m
+sim.route.curve_radius_m
+sim.events.traffic_lights.distance_m
+sim.load.positive.kw
+```
+
+## Laufzeitdaten
+
+Große und generierte Daten bleiben außerhalb des Git-Repositories. Standardmäßig verwendet die Anwendung unter Windows:
 
 ```text
 %LOCALAPPDATA%\GPS-Routenplaner\
@@ -278,95 +232,99 @@ Große bzw. generierte Anwendungsdaten bleiben bewusst **außerhalb** des Reposi
   exports\   Standardordner für Exporte
 ```
 
-Der Runtime-Speicherort kann für Tests oder besondere Installationen über `GPS_ROUTENPLANER_HOME` überschrieben werden.
+Der Runtime-Speicherort kann über `GPS_ROUTENPLANER_HOME` überschrieben werden.
 
-Für Österreich wird ein landesweites DGM verwendet. Außerhalb Österreichs werden routenbezogen Copernicus-GLO-30-Kacheln gecacht. Ein Terrain-DEM bildet Tunnel- und Brückenfahrbahnen nicht exakt ab; das ist bei starken Höhenunterschieden zu berücksichtigen.
+Für Österreich wird ein landesweites DGM verwendet. Außerhalb Österreichs werden routenbezogen Copernicus-GLO-30-Kacheln gecacht.
 
-## Bestehenden Checkout einmalig bereinigen
+## Bekannte Einschränkungen
 
-Ein `git pull` löscht ignorierte lokale Ordner wie `data` oder alte Prototype-Verzeichnisse nicht. Das Cleanup-Skript migriert ein vorhandenes `data`-Verzeichnis nach `%LOCALAPPDATA%\GPS-Routenplaner\data`, verschiebt Route-JSONs nach `state` und archiviert alte Prototype-Ordner in einem datierten Backup **neben** dem Repository statt sie ungefragt zu löschen.
+Die Anwendung ist ein technisches Simulations- und Analysewerkzeug und kein sicherheitskritisches Navigationssystem.
 
-Die `.venv` wird dabei absichtlich nicht verändert.
+Insbesondere werden derzeit keine Live-Verkehrslage, aktuellen Straßensperrungen oder realen Ampelphasen berücksichtigt.
 
-Vorab prüfen:
+Das Höhenmodell beschreibt die Geländeoberfläche. Tunnel und Brücken können deshalb lokal ein falsches Fahrbahnhöhenniveau erhalten. Auf solchen Abschnitten müssen Höhen-, Steigungs- und Leistungsergebnisse entsprechend vorsichtig interpretiert werden.
+
+Die Energieberechnung ist ein Radleistungsmodell und kein vollständiges Batterie-/Motor-/Wirkungsgradmodell.
+
+## Bestehenden Checkout bereinigen
+
+Ein `git pull` löscht ignorierte lokale Altverzeichnisse nicht. Vor einer Bereinigung zunächst prüfen:
 
 ```powershell
 .\scripts\cleanup_legacy_workspace.ps1 -WhatIf
 ```
 
-Danach ausführen:
+Danach bei Bedarf ausführen:
 
 ```powershell
 .\scripts\cleanup_legacy_workspace.ps1
 ```
 
-Ein typischer lokaler Projektroot sieht danach so aus:
+Das Skript migriert alte lokale Daten in die aktuellen Runtime-Verzeichnisse und archiviert alte Prototype-Ordner, statt sie ungefragt zu löschen.
+
+## VS Code
+
+Auf einem normalen Entwicklungsrechner ist der Interpreter:
 
 ```text
-.github/
-.venv/                    # lokal, von Git ignoriert
-wheelhouse/               # optional, lokal, für Offline-Installation
-qt_route_selector/
-scripts/
-.gitattributes
-.gitignore
-README.md
-requirements.txt
+<Repository>\.venv\Scripts\python.exe
 ```
 
-## VS-Code-Interpreter
+Wenn das Enterprise-Setup wegen deaktivierter Windows Long Paths die kurze Umgebung verwendet, lautet er stattdessen:
 
-Wenn VS Code nicht automatisch `.venv` auswählt:
+```text
+%LOCALAPPDATA%\GPSRP\venv\Scripts\python.exe
+```
 
-1. `Ctrl+Shift+P`
-2. **Python: Select Interpreter**
-3. `<Repository>\.venv\Scripts\python.exe` auswählen
-
-Danach öffnet ein neues VS-Code-Terminal normalerweise direkt mit `(.venv)`.
+In VS Code kann der Interpreter über `Ctrl+Shift+P` → **Python: Select Interpreter** ausgewählt werden.
 
 ## Projektstruktur
 
 ```text
+setup_windows.cmd              # empfohlene Windows-/Enterprise-Einrichtung
+start_windows.cmd              # Anwendung mit der passenden Python-Umgebung starten
+build_offline_dependencies.cmd # Offline-Wheelhouse auf Internet-PC erzeugen
+
 qt_route_selector/
-  __main__.py                  # python -m qt_route_selector
-  complete_app.py              # öffentlicher Anwendungseinstieg
-  main.py / main.qml           # Routenplanung und Karte
-  runtime_paths.py             # per-user Daten-/Statuspfade
+  __main__.py
+  complete_app.py
+  main.py / main.qml
+  runtime_paths.py
   auto_data.py / auto_region.py
   local_router.py / routing_cache.py
-  speed_simulation.py          # Fahrdynamik-Grundmodell
+  speed_simulation.py
   enhanced_speed_simulation.py
-  resistance_power.py          # Fahrwiderstände und Energie
+  resistance_power.py
   load_collective_curve.py
-  integrated_speed_profile.py  # öffentlicher Simulations-UI-Einstieg
-  parameter_help.py
+  integrated_speed_profile.py
+  mat_export.py
   tests/
-  _internal/simulation_layers/ # private, getestete UI-Implementierungsschichten
+  _internal/simulation_layers/
 
 scripts/
-  setup_windows.ps1            # .venv anlegen, Dependencies installieren, optional starten
-  build_offline_dependencies.ps1 # vollständiges Windows-x64-Wheelhouse vorbereiten
-  cleanup_legacy_workspace.ps1 # alte lokale Workspace-Daten sicher migrieren
+  setup_windows.ps1
+  build_offline_dependencies.ps1
+  cleanup_legacy_workspace.ps1
 ```
 
-Die Dateien unter `_internal/` sind Implementierungsdetails. Externer Code sollte nur die öffentlichen Module unter `qt_route_selector` verwenden.
+Die `.cmd`-Dateien sind die empfohlenen Einstiegspunkte unter Windows. Sie rufen die PowerShell-Skripte mit den passenden Parametern auf. Die `.ps1`-Dateien bleiben für Entwicklung und direkte Nutzung erhalten.
 
 ## Abhängigkeiten
 
-`requirements.txt` enthält die für den aktuellen Stand getesteten Python-Versionen. `scripts/setup_windows.ps1` installiert sie automatisch in `.venv` und prüft danach zentrale Laufzeitmodule wie PySide6, PyQtGraph, NumPy, GeoPandas und Rasterio.
+`requirements.txt` enthält die getesteten Python-Abhängigkeiten. Das Setup prüft zentrale Laufzeitmodule nach der Installation.
 
-Für Offline-Rechner erzeugt `scripts/build_offline_dependencies.ps1` aus derselben `requirements.txt` ein vollständiges lokales `wheelhouse`. Der Ordner ist bewusst per `.gitignore` ausgeschlossen, da die Binärpakete groß, plattformspezifisch und jederzeit reproduzierbar sind. Wenn sich `requirements.txt` ändert, sollte das Wheelhouse neu erzeugt werden.
+Für Offline-Rechner erzeugt `build_offline_dependencies.cmd` ein vollständiges lokales `wheelhouse` für **Python 3.11 / Windows x64**. Das Wheelhouse ist plattformspezifisch und wird nicht in Git committed.
 
 ## Tests
 
-Mit aktivierter `.venv`:
+Mit eingerichteter Python-Umgebung:
 
 ```powershell
 python -m unittest discover -s qt_route_selector\tests -v
 ```
 
-GitHub Actions installiert `requirements.txt`, kompiliert das Paket und führt dieselben Unit-/GUI-Smoke-Tests im Qt-Offscreen-Modus aus.
+GitHub Actions installiert `requirements.txt`, kompiliert das Paket, führt die Unit-/GUI-Smoke-Tests aus und validiert zusätzlich den Windows-Offline-Setup-Pfad.
 
 ## Generierte Dateien
 
-Laufzeitdaten gehören nicht in Git. Die `.gitignore` schließt `.venv`, das lokal erzeugte `wheelhouse`, Runtime-Ausgaben, Geodaten und die Verzeichnisnamen des alten Prototype-Workspaces aus, damit sie bei bestehenden Checkouts nicht versehentlich committed werden.
+Laufzeitdaten gehören nicht in Git. `.gitignore` schließt unter anderem `.venv`, `wheelhouse`, Runtime-Ausgaben und große Geodaten aus.
