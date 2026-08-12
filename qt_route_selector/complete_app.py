@@ -260,8 +260,8 @@ class CompleteApplicationWindow(_BaseWindow):
             f"GPX gelesen: {len(coordinates)} Trackpunkte. "
             "Ermittle daraus automatisch das passende lokale OSM-Gebiet …"
         )
-        self._update_gpx_import_button()
         self._start_region_detection(coordinates)
+        self._update_gpx_import_button()
 
     def _maybe_start_pending_gpx_import(self) -> None:
         if not self._pending_gpx_path or self._gpx_thread is not None:
@@ -395,6 +395,22 @@ class CompleteApplicationWindow(_BaseWindow):
         super()._region_failed(message)
         self._update_gpx_import_button()
 
+    @Slot()
+    def _region_thread_finished(self) -> None:
+        super()._region_thread_finished()
+        self._update_gpx_import_button()
+
+    @Slot(str)
+    def _data_preparation_failed(self, message: str) -> None:
+        self._pending_gpx_path = ""
+        self._pending_gpx_coordinates = []
+        super()._data_preparation_failed(message)
+
+    @Slot()
+    def _data_thread_finished(self) -> None:
+        super()._data_thread_finished()
+        self._update_gpx_import_button()
+
     def _start_dataset_preparation(self, dataset_key: str, *, confirm_large: bool) -> None:
         """Use a country-specific confirmation instead of calling every fallback DACH."""
         if not confirm_large:
@@ -415,9 +431,7 @@ class CompleteApplicationWindow(_BaseWindow):
                 "aber nur einmal benötigt und danach lokal als GPKG wiederverwendet.\n\n"
                 "DACH jetzt automatisch herunterladen und vorbereiten?"
             )
-            declined = (
-                "Grenzroute erkannt, aber DACH wurde nicht vorbereitet."
-            )
+            declined = "Grenzroute erkannt, aber DACH wurde nicht vorbereitet."
         elif dataset_key == "germany":
             title = "Großer Deutschland-Datensatz"
             question = (
