@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+from typing import Any
 
-from PySide6.QtCore import QObject, QTimer, Qt
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QProgressBar,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -22,13 +26,41 @@ try:
         CompleteApplicationWindow as _BaseWindow,
         cached_dataset,
     )
+    from .gpx_import import build_route_from_gpx
     from .runtime_paths import data_dir, prepare_runtime_directories, route_result_path, state_dir
     from .ui_theme import apply_readable_light_theme
 except ImportError:
     from complete_app_base import *  # type: ignore  # noqa: F401,F403
     from complete_app_base import DATASETS, CompleteApplicationWindow as _BaseWindow, cached_dataset
+    from gpx_import import build_route_from_gpx
     from runtime_paths import data_dir, prepare_runtime_directories, route_result_path, state_dir
     from ui_theme import apply_readable_light_theme
+
+
+class GpxImportWorker(QObject):
+    """Match one external GPX track to the already active local OSM dataset."""
+
+    progress = Signal(str, int)
+    finished = Signal("QVariantMap")
+    failed = Signal(str)
+
+    def __init__(self, roads_path: str, gpx_path: str) -> None:
+        super().__init__()
+        self.roads_path = roads_path
+        self.gpx_path = gpx_path
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = build_route_from_gpx(
+                self.roads_path,
+                self.gpx_path,
+                progress=lambda text, percent: self.progress.emit(text, percent),
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        else:
+            self.finished.emit(result)
 
 
 class CompleteApplicationWindow(_BaseWindow):
@@ -36,6 +68,9 @@ class CompleteApplicationWindow(_BaseWindow):
 
     def __init__(self, *args, **kwargs) -> None:
         runtime_data = data_dir()
+        self._gpx_thread: QThread | None = None
+        self._gpx_worker: GpxImportWorker | None = None
+        self._gpx_route_has_elevation = False
         super().__init__(*args, **kwargs)
         # The legacy base class historically used ``Path.cwd() / 'data'``.
         # Override it before its zero-delay restore callback runs so all OSM,
@@ -46,6 +81,7 @@ class CompleteApplicationWindow(_BaseWindow):
         if hasattr(self, "route_container"):
             self.route_container.setMinimumSize(640, 420)
         self._hide_manual_road_data_button()
+        self._update_gpx_import_button()
 
     def _stabilize_qml_backend_lifetimes(self) -> None:
         """Keep context objects alive until the QQmlApplicationEngine is torn down."""
@@ -88,8 +124,8 @@ class CompleteApplicationWindow(_BaseWindow):
         group_layout.addLayout(header)
 
         self.data_status = QLabel(
-            "Start und Ziel setzen. Die App erkennt das passende Gebiet automatisch und verwendet "
-            "vorhandene Routing- und Höhendaten oder bereitet fehlende Daten selbst vor."
+            "Start und Ziel setzen. Die App erkennt das passende Gebiet automatisch. "
+            "Anschließend die von GraphHopper exportierte GPX als fertige Route importieren."
         )
         self.data_status.setWordWrap(True)
         self.data_status.setStyleSheet("color:palette(mid);")
@@ -102,25 +138,168 @@ class CompleteApplicationWindow(_BaseWindow):
         self.data_progress.setMaximumHeight(10)
         group_layout.addWidget(self.data_progress)
 
+        self.gpx_import_button = QPushButton("GraphHopper-GPX importieren")
+        self.gpx_import_button.setToolTip(
+            "Die GraphHopper-GPX-Geometrie wird unverändert übernommen und mit dem "
+            "aktiven lokalen OSM-GPKG für Tempolimits, Straßentypen und Ampeln abgeglichen."
+        )
+        self.gpx_import_button.clicked.connect(self._choose_gpx_route)
+        group_layout.addWidget(self.gpx_import_button)
+
+        self.route_selector.pointCountChanged.connect(self._update_gpx_import_button)
+        self.route_selector.roadsFileChanged.connect(self._update_gpx_import_button)
+        self.route_selector.busyChanged.connect(self._update_gpx_import_button)
+
         self.route_data_group = data_group
         page_layout.addWidget(data_group)
         page_layout.addWidget(self.route_container, 1)
         return page
 
     def _hide_manual_road_data_button(self) -> None:
-        """Remove the old manual road-file action from the normal user workflow."""
+        """Hide legacy/manual actions superseded by the automatic GPX workflow."""
         route_window = getattr(self, "route_window", None)
         if route_window is None:
             return
+        hidden_texts = {"Straßendaten wählen", "Route berechnen"}
         for item in route_window.findChildren(QObject):
             try:
-                text = item.property("text")
+                text = str(item.property("text") or "").strip()
             except Exception:
                 continue
-            if str(text or "").strip() == "Straßendaten wählen":
+            if text in hidden_texts:
                 item.setProperty("visible", False)
                 item.setProperty("enabled", False)
-                self.manual_road_data_button_hidden = True
+                if text == "Straßendaten wählen":
+                    self.manual_road_data_button_hidden = True
+                elif text == "Route berechnen":
+                    self.local_route_button_hidden = True
+
+    @Slot()
+    def _update_gpx_import_button(self) -> None:
+        button = getattr(self, "gpx_import_button", None)
+        selector = getattr(self, "route_selector", None)
+        if button is None or selector is None:
+            return
+        ready = (
+            self._gpx_thread is None
+            and not bool(selector.busy)
+            and int(selector.pointCount) >= 2
+            and bool(str(selector.roadsFile or "").strip())
+        )
+        button.setEnabled(ready)
+
+    @Slot()
+    def _choose_gpx_route(self) -> None:
+        if self._gpx_thread is not None:
+            return
+        selector = self.route_selector
+        if int(selector.pointCount) < 2:
+            QMessageBox.information(
+                self,
+                "GPX importieren",
+                "Zuerst Start und Ziel setzen, damit das passende lokale OSM-Gebiet automatisch aktiviert wird.",
+            )
+            return
+        roads_file = str(selector.roadsFile or "").strip()
+        if not roads_file or not Path(roads_file).is_file():
+            QMessageBox.information(
+                self,
+                "GPX importieren",
+                "Die lokalen Routingdaten für das erkannte Gebiet sind noch nicht bereit.",
+            )
+            return
+
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "GraphHopper-GPX als Route importieren",
+            str(Path.home()),
+            "GPX-Dateien (*.gpx);;Alle Dateien (*)",
+        )
+        if not selected:
+            return
+
+        self.data_progress.setRange(0, 100)
+        self.data_progress.setValue(0)
+        self.data_status.setText(
+            "GraphHopper-GPX wird eingelesen und mit den lokalen OSM-Straßen abgeglichen …"
+        )
+        thread = QThread(self)
+        worker = GpxImportWorker(roads_file, selected)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._gpx_progress_changed)
+        worker.finished.connect(self._gpx_import_finished)
+        worker.failed.connect(self._gpx_import_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._gpx_thread_finished)
+        self._gpx_thread = thread
+        self._gpx_worker = worker
+        self._update_gpx_import_button()
+        thread.start()
+
+    @Slot(str, int)
+    def _gpx_progress_changed(self, text: str, percent: int) -> None:
+        self.data_status.setText(text)
+        self.data_progress.setValue(percent)
+
+    @Slot("QVariantMap")
+    def _gpx_import_finished(self, result: dict[str, Any]) -> None:
+        coordinates = result.get("coordinates", []) if isinstance(result, dict) else []
+        elevation_count = sum(
+            1
+            for point in coordinates
+            if isinstance(point, dict) and point.get("elevation_m") is not None
+        )
+        self._gpx_route_has_elevation = elevation_count >= 2
+        try:
+            # Reuse the normal route-result writer, map updates and simulation
+            # signals. Only the route geometry source is different.
+            self.route_selector._route_finished(result)
+        finally:
+            self._gpx_route_has_elevation = False
+
+        summary = result.get("summary", {}) if isinstance(result, dict) else {}
+        distance_km = float(summary.get("distance_km", 0.0) or 0.0)
+        matched = int(summary.get("gpx_matched_segments", 0) or 0)
+        unmatched = int(summary.get("gpx_unmatched_segments", 0) or 0)
+        if elevation_count >= 2:
+            self.data_status.setText(
+                f"✓ GraphHopper-GPX importiert: {distance_km:.2f} km. "
+                f"OSM-Zuordnung {matched}/{matched + unmatched} Segmente; "
+                f"{elevation_count} GPX-Höhenpunkte werden direkt verwendet."
+            )
+            self.data_progress.setValue(100)
+        self.route_selector.statusChanged.emit(
+            f"GraphHopper-GPX importiert: {distance_km:.2f} km; "
+            f"{matched}/{matched + unmatched} Segmente mit lokalen OSM-Daten verknüpft."
+        )
+
+    @Slot(str)
+    def _gpx_import_failed(self, message: str) -> None:
+        self.data_progress.setRange(0, 100)
+        self.data_progress.setValue(0)
+        self.data_status.setText(f"GPX-Import fehlgeschlagen: {message}")
+        QMessageBox.critical(self, "GPX-Import fehlgeschlagen", message)
+
+    @Slot()
+    def _gpx_thread_finished(self) -> None:
+        self._gpx_thread = None
+        self._gpx_worker = None
+        self._update_gpx_import_button()
+
+    def _route_changed(self, points: list[dict[str, Any]]) -> None:
+        # GraphHopper exports elevation per track point. If it is present, the
+        # simulation can use it directly and no Copernicus/DEM download is
+        # necessary merely to obtain an elevation profile.
+        if self._gpx_route_has_elevation and len(points) > 1:
+            self._simulation_load_pending = True
+            if self.tabs.currentIndex() == 1 and self.speed_profile is not None:
+                QTimer.singleShot(80, self._load_pending_simulation)
+            return
+        super()._route_changed(points)
 
     def _clear_stale_automatic_routing_data(self) -> None:
         """Prevent a previously active regional GPKG from routing a new region."""
