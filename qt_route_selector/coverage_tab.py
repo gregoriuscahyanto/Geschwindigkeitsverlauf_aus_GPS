@@ -31,7 +31,7 @@ APP_DIR = Path(__file__).resolve().parent
 
 
 class CoverageTab(QWidget):
-    """Local-only overview of downloaded boundaries, PBFs and routing GPKGs."""
+    """Local-only overview of datasets that have both POLY and PBF files."""
 
     def __init__(
         self,
@@ -74,7 +74,8 @@ class CoverageTab(QWidget):
         side_layout.addWidget(title)
 
         intro = QLabel(
-            "Die Karte zeigt nur Dateien, die bereits lokal im data-Ordner liegen. "
+            "Angezeigt werden nur Gebiete, für die sowohl die Gebietsgrenze (.poly) "
+            "als auch die OSM-PBF-Datei lokal im data-Ordner vorhanden sind. "
             "Es wird in diesem Tab nichts zusätzlich heruntergeladen.",
             side,
         )
@@ -83,7 +84,6 @@ class CoverageTab(QWidget):
 
         legend = QLabel(
             "<b>Kartenfarben</b><br>"
-            "<span style='color:#6e747c'>■</span> nur Gebietsgrenze (.poly)<br>"
             "<span style='color:#175a9e'>■</span> OSM-PBF vorhanden<br>"
             "<span style='color:#216b2d'>■</span> Routing-GPKG bereit<br>"
             "<span style='color:#9b5b00'>■</span> GPKG älter als PBF",
@@ -98,7 +98,7 @@ class CoverageTab(QWidget):
         divider.setFrameShadow(QFrame.Shadow.Sunken)
         side_layout.addWidget(divider)
 
-        status_title = QLabel("Dateien je Gebiet", side)
+        status_title = QLabel("Verfügbare Gebiete", side)
         status_title.setStyleSheet("font-weight: 700;")
         side_layout.addWidget(status_title)
 
@@ -123,24 +123,37 @@ class CoverageTab(QWidget):
     def _mark(value: bool) -> str:
         return "✓" if value else "–"
 
+    @staticmethod
+    def _is_available(state: dict[str, object]) -> bool:
+        return bool(state["poly_ready"]) and bool(state["pbf_ready"])
+
     def refresh(self, *, active_dataset_key: str | None = None) -> None:
         if active_dataset_key is not None:
             self.active_dataset_key = active_dataset_key
 
-        areas = coverage_snapshot(
-            self.data_root,
-            active_dataset_key=self.active_dataset_key,
-        )
+        # coverage_snapshot also contains regions for which only a .poly boundary
+        # exists. Those are useful for automatic region detection, but they are
+        # not usable routing datasets and therefore must not appear in this tab.
+        areas = [
+            area
+            for area in coverage_snapshot(
+                self.data_root,
+                active_dataset_key=self.active_dataset_key,
+            )
+            if str(area.get("level", "")) != "poly"
+        ]
         root_object = self.map_widget.rootObject()
         if root_object is not None:
             root_object.setProperty("coverageAreas", areas)
 
         lines: list[str] = []
-        local_polygon_count = 0
+        available_count = 0
         for dataset_key in DATASET_ORDER:
             state = dataset_storage_state(dataset_key, self.data_root)
-            if bool(state["poly_ready"]):
-                local_polygon_count += 1
+            if not self._is_available(state):
+                continue
+
+            available_count += 1
             active = "▶ " if dataset_key == self.active_dataset_key else "  "
             lines.append(
                 f"{active}{state['label']}\n"
@@ -148,15 +161,19 @@ class CoverageTab(QWidget):
                 f"PBF {self._mark(bool(state['pbf_ready']))}   "
                 f"GPKG {self._mark(bool(state['gpkg_ready']))}"
             )
-        self.inventory_label.setText("\n\n".join(lines))
 
-        if local_polygon_count == 0:
+        if lines:
+            self.inventory_label.setText("\n\n".join(lines))
+        else:
+            self.inventory_label.setText("Keine verfügbaren Gebiete")
+
+        if available_count == 0:
             self.note_label.setText(
-                "Noch keine .poly-Gebietsgrenzen lokal. Sie werden automatisch geladen, sobald "
-                "Start und Ziel erstmals für die Gebietserkennung gesetzt werden."
+                "Ein Gebiet erscheint hier automatisch, sobald seine .poly- und "
+                ".osm.pbf-Datei gemeinsam im lokalen data/osm-Ordner liegen."
             )
         else:
             self.note_label.setText(
                 "▶ kennzeichnet den aktuell fürs Routing aktivierten Datensatz. "
-                "DACH wird als großflächige Hintergrundabdeckung dargestellt; regionale Daten liegen darüber."
+                "Neue Gebiete erscheinen automatisch, sobald POLY und PBF lokal vorhanden sind."
             )
