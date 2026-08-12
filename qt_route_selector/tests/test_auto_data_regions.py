@@ -82,6 +82,44 @@ class AutomaticRegionDataTests(unittest.TestCase):
             discover_local_datasets(root)
             self.assertNotIn("italy", DATASETS)
 
+    def test_dated_local_pbf_uses_poly_basename(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            osm = root / "osm"
+            osm.mkdir(parents=True)
+            poly = osm / "california.poly"
+            pbf = osm / "california-260811.osm.pbf"
+            poly.write_text(
+                "california\n"
+                "1\n"
+                " -125.0 32.0\n"
+                " -113.0 32.0\n"
+                " -113.0 43.0\n"
+                " -125.0 43.0\n"
+                " -125.0 32.0\n"
+                "END\n"
+                "END\n",
+                encoding="utf-8",
+            )
+            pbf.write_bytes(b"dated-test-pbf")
+
+            discovered = discover_local_datasets(root)
+            self.assertIn("california", discovered)
+            self.assertEqual(DATASETS["california"]["osm_filename"], pbf.name)
+            self.assertEqual(DATASETS["california"]["poly_filename"], poly.name)
+
+            with patch("auto_region.ensure_region_boundaries"):
+                selected = detect_dataset_for_points(
+                    [(34.05, -118.25), (37.77, -122.42)],
+                    root,
+                )
+            self.assertEqual(selected, "california")
+
+            pbf.unlink()
+            poly.unlink()
+            discover_local_datasets(root)
+            self.assertNotIn("california", DATASETS)
+
     def test_rheinland_pfalz_is_selected_instead_of_dach(self) -> None:
         points = [
             (50.3356, 6.9475),  # Nürburgring area
