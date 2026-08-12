@@ -119,9 +119,9 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
             if "exportieren" in button.text().lower():
                 button.setText("MAT exportieren")
                 button.setToolTip(
-                    "Eine MATLAB-.mat direkt aus Python erzeugen. Alle exportierten Variablen "
-                    "sind einzelne double-Arrays, inklusive Zeit, Geschwindigkeit, Radius, "
-                    "Höhenprofil, Leistung und Energie."
+                    "MATLAB-.mat mit synchronisierten Simulationseingängen erzeugen. "
+                    "Alle input_*-Signale und alle Felder in sim_input besitzen exakt "
+                    "dieselbe N×1-Länge wie time_s."
                 )
                 self._mat_export_button = button
 
@@ -129,10 +129,10 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
     def _mat_exporter():
         """Load SciPy only when the user actually exports."""
         try:
-            from .mat_export import export_matlab_simulation
+            from .synchronized_mat_export import export_matlab_simulation
         except ImportError as package_error:
             try:
-                from mat_export import export_matlab_simulation
+                from synchronized_mat_export import export_matlab_simulation
             except ImportError:
                 raise RuntimeError(
                     "Für den MAT-Export fehlt SciPy in der aktuellen .venv.\n\n"
@@ -236,9 +236,9 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
             self,
             "MAT-Export fertig",
             f"Gespeichert:\n{mat_path}\n\n"
-            "Die Datei wurde vollständig in Python erzeugt. Alle exportierten Workspace-"
-            "Variablen sind einzelne double-Arrays, z. B. time_s, v_kmh, elevation_m, "
-            "curve_radius_m und p_total_kw."
+            "Für die Folgesimulation verwende sim_input oder die input_*-Variablen. "
+            "Alle diese Signale sind N×1 und besitzen exakt dieselbe Länge wie input_time_s, "
+            "z. B. input_v_kmh, input_curve_radius_m, input_elevation_m und input_p_total_kw."
         )
 
     @Slot(str)
