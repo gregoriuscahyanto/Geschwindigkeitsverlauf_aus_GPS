@@ -12,7 +12,11 @@ if str(APP_DIR) not in sys.path:
 
 # Import auto_region first: it registers the additional Germany/Rheinland-Pfalz
 # datasets in the shared auto_data.DATASETS catalog.
-from auto_region import detect_dataset_for_points, ensure_region_boundaries  # noqa: E402
+from auto_region import (  # noqa: E402
+    detect_dataset_for_points,
+    discover_local_datasets,
+    ensure_region_boundaries,
+)
 from auto_data import (  # noqa: E402
     DATASETS,
     copernicus_tile_id,
@@ -38,6 +42,45 @@ class AutomaticRegionDataTests(unittest.TestCase):
             dataset = DATASETS[key]
             self.assertTrue(str(dataset["osm_url"]).endswith("-latest.osm.pbf"))
             self.assertTrue(str(dataset["poly_url"]).endswith(".poly"))
+
+    def test_new_local_poly_pbf_pair_is_discovered_and_selected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            osm = root / "osm"
+            osm.mkdir(parents=True)
+            poly = osm / "italy.poly"
+            pbf = osm / "italy-latest.osm.pbf"
+            poly.write_text(
+                "italy\n"
+                "1\n"
+                " 7.0 36.0\n"
+                " 19.0 36.0\n"
+                " 19.0 48.0\n"
+                " 7.0 48.0\n"
+                " 7.0 36.0\n"
+                "END\n"
+                "END\n",
+                encoding="utf-8",
+            )
+            pbf.write_bytes(b"test-pbf")
+
+            discovered = discover_local_datasets(root)
+            self.assertIn("italy", discovered)
+            self.assertEqual(DATASETS["italy"]["osm_filename"], pbf.name)
+            self.assertEqual(DATASETS["italy"]["poly_filename"], poly.name)
+            self.assertTrue(DATASETS["italy"]["local_discovered"])
+
+            with patch("auto_region.ensure_region_boundaries"):
+                selected = detect_dataset_for_points(
+                    [(41.9, 12.5), (45.4, 9.2)],
+                    root,
+                )
+            self.assertEqual(selected, "italy")
+
+            pbf.unlink()
+            poly.unlink()
+            discover_local_datasets(root)
+            self.assertNotIn("italy", DATASETS)
 
     def test_rheinland_pfalz_is_selected_instead_of_dach(self) -> None:
         points = [
