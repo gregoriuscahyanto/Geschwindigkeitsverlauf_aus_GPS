@@ -59,10 +59,54 @@ if (Test-Path $Wheelhouse) {
 
 if ($OfflineWheels.Count -gt 0) {
     Write-Host "Offline-Wheelhouse erkannt ($($OfflineWheels.Count) Pakete)."
+
+    $ManifestPath = Join-Path $Wheelhouse "MANIFEST.txt"
+    if (-not (Test-Path $ManifestPath)) {
+        throw "Das lokale wheelhouse besitzt keine MANIFEST.txt und kann deshalb nicht sicher geprüft werden. Auf einem Internet-PC .\scripts\build_offline_dependencies.ps1 neu ausführen und den kompletten wheelhouse-Ordner erneut kopieren."
+    }
+
+    $ManifestText = Get-Content -Raw -Path $ManifestPath
+    $CurrentRequirementsHash = (Get-FileHash -Algorithm SHA256 $Requirements).Hash.ToUpperInvariant()
+    $HashMatch = [regex]::Match(
+        $ManifestText,
+        '(?im)^requirements\.txt SHA256:\s*([0-9a-f]{64})\s*$'
+    )
+    if (-not $HashMatch.Success) {
+        throw "Die MANIFEST.txt im wheelhouse enthält keinen gültigen requirements.txt-Hash. Das wheelhouse bitte auf einem Internet-PC neu erzeugen."
+    }
+
+    $WheelhouseRequirementsHash = $HashMatch.Groups[1].Value.ToUpperInvariant()
+    if ($WheelhouseRequirementsHash -ne $CurrentRequirementsHash) {
+        throw "Das wheelhouse ist veraltet und passt nicht zur aktuellen requirements.txt. Wahrscheinlich wurde es vor einer Dependency-Änderung erzeugt. Auf einem Internet-PC .\scripts\build_offline_dependencies.ps1 neu ausführen und den kompletten wheelhouse-Ordner erneut kopieren."
+    }
+
+    $CountMatch = [regex]::Match($ManifestText, '(?im)^Anzahl Wheels:\s*(\d+)\s*$')
+    if ($CountMatch.Success) {
+        $ExpectedWheelCount = [int]$CountMatch.Groups[1].Value
+        if ($ExpectedWheelCount -ne $OfflineWheels.Count) {
+            throw "Das wheelhouse ist unvollständig: MANIFEST.txt erwartet $ExpectedWheelCount Wheels, gefunden wurden $($OfflineWheels.Count). Den kompletten wheelhouse-Ordner erneut kopieren."
+        }
+    }
+
+    $ManifestWheelNames = @(
+        Get-Content -Path $ManifestPath |
+            Where-Object { $_ -match '\.whl\s*$' } |
+            ForEach-Object { $_.Trim() }
+    )
+    $MissingWheelNames = @(
+        $ManifestWheelNames |
+            Where-Object { -not (Test-Path (Join-Path $Wheelhouse $_)) }
+    )
+    if ($MissingWheelNames.Count -gt 0) {
+        $Preview = ($MissingWheelNames | Select-Object -First 5) -join ', '
+        throw "Das wheelhouse ist unvollständig. Fehlende Wheel-Datei(en): $Preview. Den kompletten wheelhouse-Ordner erneut kopieren."
+    }
+
+    Write-Host "Wheelhouse passt zur aktuellen requirements.txt."
     Write-Host "Installiere Abhängigkeiten ausschließlich lokal; PyPI wird nicht verwendet ..."
     & $PythonExe -m pip install --no-index --find-links $Wheelhouse -r $Requirements
     if ($LASTEXITCODE -ne 0) {
-        throw "Die Offline-Installation ist fehlgeschlagen. Das wheelhouse ist vermutlich unvollständig oder passt nicht zu Python 3.11/Windows x64. Auf einem Internet-PC .\scripts\build_offline_dependencies.ps1 neu ausführen."
+        throw "Die Offline-Installation ist fehlgeschlagen. Das wheelhouse passt möglicherweise nicht zu Python 3.11/Windows x64. Auf einem Internet-PC .\scripts\build_offline_dependencies.ps1 neu ausführen."
     }
     $InstallMode = "offline aus $Wheelhouse"
 } else {
