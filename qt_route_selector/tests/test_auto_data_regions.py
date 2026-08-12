@@ -12,7 +12,7 @@ if str(APP_DIR) not in sys.path:
 
 # Import auto_region first: it registers the additional Germany/Rheinland-Pfalz
 # datasets in the shared auto_data.DATASETS catalog.
-from auto_region import detect_dataset_for_points  # noqa: E402
+from auto_region import detect_dataset_for_points, ensure_region_boundaries  # noqa: E402
 from auto_data import (  # noqa: E402
     DATASETS,
     copernicus_tile_id,
@@ -65,6 +65,43 @@ class AutomaticRegionDataTests(unittest.TestCase):
             side_effect=lambda key, _root, _points: key == "dach",
         ):
             self.assertEqual(detect_dataset_for_points(points, "unused"), "dach")
+
+    def test_offline_local_region_is_used_without_any_download(self) -> None:
+        points = [(50.3356, 6.9475), (50.3790, 6.9490)]
+
+        def local_membership(key: str, _root: object, _points: object) -> bool | None:
+            if key == "rheinland_pfalz":
+                return True
+            return None
+
+        with patch(
+            "auto_region.points_within_dataset",
+            side_effect=local_membership,
+        ), patch("auto_region._download_boundary") as download:
+            self.assertEqual(
+                detect_dataset_for_points(points, "offline-data"),
+                "rheinland_pfalz",
+            )
+            download.assert_not_called()
+
+    def test_boundary_download_failure_is_best_effort(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "auto_region._download_boundary",
+            side_effect=OSError("firewall"),
+        ) as download:
+            ensure_region_boundaries(tmp)
+            # After the first network failure all remaining missing boundaries
+            # are skipped instead of causing repeated firewall timeouts.
+            self.assertEqual(download.call_count, 1)
+
+    def test_missing_offline_boundaries_have_actionable_error(self) -> None:
+        points = [(50.3356, 6.9475), (50.3790, 6.9490)]
+        with patch("auto_region.ensure_region_boundaries"), patch(
+            "auto_region.points_within_dataset",
+            return_value=None,
+        ):
+            with self.assertRaisesRegex(ValueError, r"\.poly"):
+                detect_dataset_for_points(points, "offline-data")
 
     def test_copernicus_tile_name_for_stuttgart(self) -> None:
         self.assertEqual(

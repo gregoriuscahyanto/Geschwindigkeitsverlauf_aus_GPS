@@ -91,7 +91,7 @@ def _download_boundary(
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response, partial.open("wb") as target:
+        with urllib.request.urlopen(request, timeout=8) as response, partial.open("wb") as target:
             while True:
                 block = response.read(64 * 1024)
                 if not block:
@@ -108,17 +108,101 @@ def ensure_region_boundaries(
     data_root: str | Path,
     progress: Any | None = None,
 ) -> None:
+    """Best-effort boundary preparation that remains usable behind a firewall.
+
+    Existing local .poly files are always kept. Once a missing boundary proves
+    that network access is unavailable, the remaining missing boundaries are
+    skipped instead of aborting the complete automatic region detection.
+    """
+
     keys = REGIONAL_DATASET_KEYS + COUNTRY_DATASET_KEYS + ("dach",)
     total = len(keys)
+    root = Path(data_root).expanduser().resolve()
+    network_unavailable = False
+    missing: list[str] = []
+
     for index, dataset_key in enumerate(keys, start=1):
+        dataset = DATASETS[dataset_key]
+        boundary_path = root / "osm" / str(dataset["poly_filename"])
+        percent = int((index - 1) / total * 90)
+
+        if boundary_path.is_file() and boundary_path.stat().st_size > 0:
+            if progress is not None:
+                progress(f"Gebietsgrenze lokal: {dataset_label(dataset_key)}", percent)
+            continue
+
+        missing.append(dataset_key)
+        if network_unavailable:
+            if progress is not None:
+                progress(
+                    f"Gebietsgrenze fehlt lokal: {dataset_label(dataset_key)}",
+                    percent,
+                )
+            continue
+
         if progress is not None:
             progress(
-                f"Prüfe Gebietsgrenze: {dataset_label(dataset_key)} …",
-                int((index - 1) / total * 90),
+                f"Gebietsgrenze fehlt lokal, versuche Download: {dataset_label(dataset_key)} …",
+                percent,
             )
-        _download_boundary(dataset_key, data_root)
+        try:
+            _download_boundary(dataset_key, root)
+        except Exception:
+            # A managed/offline PC commonly blocks all boundary downloads. Do
+            # not wait for every URL and do not invalidate boundaries that are
+            # already available locally.
+            network_unavailable = True
+            if progress is not None:
+                progress(
+                    "Kein Zugriff auf Gebietsgrenzen im Internet – verwende nur lokale POLY-Dateien.",
+                    percent,
+                )
+        else:
+            missing.pop()
+
     if progress is not None:
-        progress("Gebietsgrenzen sind lokal verfügbar.", 100)
+        if missing:
+            progress(
+                f"Lokale Gebietsgrenzen geprüft; {len(missing)} Grenze(n) fehlen.",
+                100,
+            )
+        else:
+            progress("Gebietsgrenzen sind lokal verfügbar.", 100)
+
+
+def _match_cached_boundaries(
+    selected: list[Mapping[str, object] | Sequence[float]],
+    data_root: str | Path,
+) -> tuple[str, list[str]]:
+    """Return a safe match from currently available local polygons only."""
+
+    missing: list[str] = []
+
+    for dataset_key in REGIONAL_DATASET_KEYS:
+        result = points_within_dataset(dataset_key, data_root, selected)
+        if result is True:
+            return dataset_key, missing
+        if result is None:
+            missing.append(dataset_key)
+
+    for dataset_key in COUNTRY_DATASET_KEYS:
+        result = points_within_dataset(dataset_key, data_root, selected)
+        if result is True:
+            return dataset_key, missing
+        if result is None:
+            missing.append(dataset_key)
+
+    dach_result = points_within_dataset("dach", data_root, selected)
+    if dach_result is None:
+        missing.append("dach")
+    elif dach_result is True:
+        # Only call a route cross-border when all country boundaries were
+        # actually available and have already rejected a single-country match.
+        missing_countries = set(missing).intersection(COUNTRY_DATASET_KEYS)
+        if not missing_countries:
+            return "dach", missing
+
+    return "", missing
 
 
 def detect_dataset_for_points(
@@ -130,28 +214,36 @@ def detect_dataset_for_points(
     if len(selected) < 2:
         raise ValueError("Für die automatische Gebietserkennung werden mindestens zwei Punkte benötigt.")
 
-    ensure_region_boundaries(data_root, progress=progress)
+    # First use what is already local. This is the critical enterprise/offline
+    # path: a copied Rheinland-Pfalz polygon must work without first contacting
+    # unrelated BW/Bayern/Switzerland boundary URLs.
+    dataset_key, missing = _match_cached_boundaries(selected, data_root)
+    if dataset_key:
+        return dataset_key
 
-    # Small extracts first: this keeps downloads and routing indexes compact.
-    for dataset_key in REGIONAL_DATASET_KEYS:
-        if points_within_dataset(dataset_key, data_root, selected) is True:
+    # On an online development machine, fill missing boundaries. On a managed
+    # offline machine this is best-effort and never destroys the local result.
+    if missing:
+        ensure_region_boundaries(data_root, progress=progress)
+        dataset_key, missing = _match_cached_boundaries(selected, data_root)
+        if dataset_key:
             return dataset_key
-
-    # Then distinguish the three countries. In particular, points elsewhere in
-    # Germany must resolve to Germany and must never be labelled cross-border.
-    for dataset_key in COUNTRY_DATASET_KEYS:
-        if points_within_dataset(dataset_key, data_root, selected) is True:
-            return dataset_key
-
-    # Only points that do not fit into one country but still lie inside the
-    # combined DACH polygon are genuinely cross-border.
-    if points_within_dataset("dach", data_root, selected) is True:
-        return "dach"
 
     coordinates = [
         f"{_coordinate_pair(point)[0]:.5f}, {_coordinate_pair(point)[1]:.5f}"
         for point in selected
     ]
+
+    if missing:
+        missing_labels = ", ".join(dataset_label(key) for key in missing)
+        raise ValueError(
+            "Gebiet konnte offline nicht sicher automatisch bestimmt werden. "
+            f"Folgende Gebietsgrenzen (.poly) fehlen lokal: {missing_labels}. "
+            "Kopiere auf den Enterprise-PC den kompletten Ordner "
+            "%LOCALAPPDATA%\\GPS-Routenplaner\\data\\osm inklusive der .poly-Dateien. "
+            f"Punkte: {'; '.join(coordinates)}"
+        )
+
     raise ValueError(
         "Mindestens ein Punkt liegt außerhalb der derzeit automatisch unterstützten "
         "Gebiete (Deutschland, Österreich, Schweiz bzw. DACH). "

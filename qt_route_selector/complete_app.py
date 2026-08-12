@@ -23,10 +23,12 @@ try:
         cached_dataset,
     )
     from .runtime_paths import data_dir, prepare_runtime_directories, route_result_path, state_dir
+    from .ui_theme import apply_readable_light_theme
 except ImportError:
     from complete_app_base import *  # type: ignore  # noqa: F401,F403
     from complete_app_base import DATASETS, CompleteApplicationWindow as _BaseWindow, cached_dataset
     from runtime_paths import data_dir, prepare_runtime_directories, route_result_path, state_dir
+    from ui_theme import apply_readable_light_theme
 
 
 class CompleteApplicationWindow(_BaseWindow):
@@ -300,7 +302,11 @@ def main() -> int:
     # directory so those files never pollute the source checkout.
     os.chdir(paths["state"])
 
+    # Keep Qt Quick Controls and QWidget styling consistent even when a managed
+    # Windows installation forces a dark/high-contrast system application theme.
+    os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Fusion")
     app = QApplication(sys.argv)
+    apply_readable_light_theme(app)
     app.setApplicationName("GPS-Routenplaner")
     app.setApplicationDisplayName("GPS-Routenplaner und Geschwindigkeitsverlauf")
     app.setOrganizationName("GPSDrivingSimulation")
