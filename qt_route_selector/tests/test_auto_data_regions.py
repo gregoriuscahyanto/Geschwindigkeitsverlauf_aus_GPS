@@ -4,11 +4,15 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+# Import auto_region first: it registers the additional Germany/Rheinland-Pfalz
+# datasets in the shared auto_data.DATASETS catalog.
+from auto_region import detect_dataset_for_points  # noqa: E402
 from auto_data import (  # noqa: E402
     DATASETS,
     copernicus_tile_id,
@@ -23,6 +27,8 @@ class AutomaticRegionDataTests(unittest.TestCase):
             "baden_wuerttemberg",
             "bayern",
             "hessen",
+            "rheinland_pfalz",
+            "germany",
             "switzerland",
             "austria",
             "dach",
@@ -32,6 +38,33 @@ class AutomaticRegionDataTests(unittest.TestCase):
             dataset = DATASETS[key]
             self.assertTrue(str(dataset["osm_url"]).endswith("-latest.osm.pbf"))
             self.assertTrue(str(dataset["poly_url"]).endswith(".poly"))
+
+    def test_rheinland_pfalz_is_selected_instead_of_dach(self) -> None:
+        points = [
+            (50.3356, 6.9475),  # Nürburgring area
+            (50.3790, 6.9490),
+        ]
+        with patch("auto_region.ensure_region_boundaries"), patch(
+            "auto_region.points_within_dataset",
+            side_effect=lambda key, _root, _points: key == "rheinland_pfalz",
+        ):
+            self.assertEqual(detect_dataset_for_points(points, "unused"), "rheinland_pfalz")
+
+    def test_other_german_area_uses_germany_not_dach(self) -> None:
+        points = [(50.9, 6.9), (51.2, 7.1)]
+        with patch("auto_region.ensure_region_boundaries"), patch(
+            "auto_region.points_within_dataset",
+            side_effect=lambda key, _root, _points: key == "germany",
+        ):
+            self.assertEqual(detect_dataset_for_points(points, "unused"), "germany")
+
+    def test_dach_is_only_final_cross_country_fallback(self) -> None:
+        points = [(47.6, 9.2), (47.4, 9.7)]
+        with patch("auto_region.ensure_region_boundaries"), patch(
+            "auto_region.points_within_dataset",
+            side_effect=lambda key, _root, _points: key == "dach",
+        ):
+            self.assertEqual(detect_dataset_for_points(points, "unused"), "dach")
 
     def test_copernicus_tile_name_for_stuttgart(self) -> None:
         self.assertEqual(

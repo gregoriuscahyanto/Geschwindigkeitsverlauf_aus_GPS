@@ -8,21 +8,40 @@ from typing import Any, Iterable, Mapping, Sequence
 from auto_data import DATASETS, points_within_dataset
 from routing_cache import default_cache_path
 
+try:
+    from .region_catalog import register_extra_datasets
+except ImportError:
+    from region_catalog import register_extra_datasets
 
+
+register_extra_datasets(DATASETS)
+
+
+# Prefer the smallest useful extract first. Country polygons are checked only
+# after the supported German regional extracts. DACH is the final fallback and
+# therefore now means that the selected points really span more than one DACH
+# country instead of merely lying outside BW/Bayern/Hessen.
 REGIONAL_DATASET_KEYS = (
     "baden_wuerttemberg",
     "bayern",
     "hessen",
-    "switzerland",
+    "rheinland_pfalz",
+)
+
+COUNTRY_DATASET_KEYS = (
     "austria",
+    "germany",
+    "switzerland",
 )
 
 DATASET_ORDER = (
+    "germany",
     "austria",
+    "switzerland",
     "baden_wuerttemberg",
     "bayern",
     "hessen",
-    "switzerland",
+    "rheinland_pfalz",
     "dach",
 )
 
@@ -30,7 +49,9 @@ DISPLAY_LABELS = {
     "austria": "Österreich (gesamt)",
     "baden_wuerttemberg": "Baden-Württemberg",
     "bayern": "Bayern",
+    "germany": "Deutschland (gesamt)",
     "hessen": "Hessen",
+    "rheinland_pfalz": "Rheinland-Pfalz",
     "switzerland": "Schweiz",
     "dach": "DACH – grenzüberschreitend",
 }
@@ -87,7 +108,7 @@ def ensure_region_boundaries(
     data_root: str | Path,
     progress: Any | None = None,
 ) -> None:
-    keys = REGIONAL_DATASET_KEYS + ("dach",)
+    keys = REGIONAL_DATASET_KEYS + COUNTRY_DATASET_KEYS + ("dach",)
     total = len(keys)
     for index, dataset_key in enumerate(keys, start=1):
         if progress is not None:
@@ -111,10 +132,19 @@ def detect_dataset_for_points(
 
     ensure_region_boundaries(data_root, progress=progress)
 
+    # Small extracts first: this keeps downloads and routing indexes compact.
     for dataset_key in REGIONAL_DATASET_KEYS:
         if points_within_dataset(dataset_key, data_root, selected) is True:
             return dataset_key
 
+    # Then distinguish the three countries. In particular, points elsewhere in
+    # Germany must resolve to Germany and must never be labelled cross-border.
+    for dataset_key in COUNTRY_DATASET_KEYS:
+        if points_within_dataset(dataset_key, data_root, selected) is True:
+            return dataset_key
+
+    # Only points that do not fit into one country but still lie inside the
+    # combined DACH polygon are genuinely cross-border.
     if points_within_dataset("dach", data_root, selected) is True:
         return "dach"
 
@@ -124,7 +154,7 @@ def detect_dataset_for_points(
     ]
     raise ValueError(
         "Mindestens ein Punkt liegt außerhalb der derzeit automatisch unterstützten "
-        "Gebiete (Baden-Württemberg, Bayern, Hessen, Schweiz, Österreich bzw. DACH). "
+        "Gebiete (Deutschland, Österreich, Schweiz bzw. DACH). "
         f"Punkte: {'; '.join(coordinates)}"
     )
 
@@ -244,8 +274,8 @@ def coverage_snapshot(
     """Return local-only polygon payloads for the data-coverage map.
 
     No downloads are started here. A region is drawable only when its .poly file
-    is already present locally. DACH is emitted first so regional polygons remain
-    visible above the broad cross-border overlay.
+    is already present locally. Broad DACH/Germany polygons are emitted first so
+    the smaller regional polygons remain visible above them.
     """
 
     root = Path(data_root).expanduser().resolve()
