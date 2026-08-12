@@ -15,14 +15,12 @@ from PySide6.QtWidgets import (
 
 try:
     from .auto_region import (
-        DATASETS,
         DATASET_ORDER,
         coverage_snapshot,
         dataset_storage_state,
     )
 except ImportError:
     from auto_region import (
-        DATASETS,
         DATASET_ORDER,
         coverage_snapshot,
         dataset_storage_state,
@@ -84,6 +82,7 @@ class CoverageTab(QWidget):
         intro = QLabel(
             "Angezeigt werden nur Gebiete, für die sowohl die Gebietsgrenze (.poly) "
             "als auch die OSM-PBF-Datei lokal im data-Ordner vorhanden sind. "
+            "Gebietsnamen werden ausschließlich aus den lokalen Dateinamen abgeleitet. "
             "Neue passende Dateipaare werden automatisch erkannt. "
             "Es wird in diesem Tab nichts zusätzlich heruntergeladen.",
             side,
@@ -139,20 +138,28 @@ class CoverageTab(QWidget):
 
     @staticmethod
     def _display_label(state: dict[str, object]) -> str:
-        label = str(state.get("label", "") or "").strip()
-        if label and label.lower() not in {"none", "null", "polygon", "poly"}:
-            return label
+        """Build the visible region name only from the local POLY filename."""
 
         poly_path = Path(str(state.get("poly_file", "") or ""))
         base_name = poly_path.stem.strip()
         if not base_name:
             return "Lokales Gebiet"
-        derived = base_name.replace("_", " ").replace("-", " ").title()
 
-        dataset_key = str(state.get("dataset", "") or "")
-        if dataset_key in DATASETS:
-            DATASETS[dataset_key]["label"] = derived
-        return derived
+        # Keep meaningful hyphens from filenames such as rheinland-pfalz.poly.
+        # Underscores are only converted to spaces for readability. No catalog
+        # label, POLY header or country-specific translation is consulted here.
+        words = []
+        for token in base_name.replace("_", " ").split(" "):
+            if not token:
+                continue
+            hyphen_parts = token.split("-")
+            words.append(
+                "-".join(
+                    part[:1].upper() + part[1:] if part else part
+                    for part in hyphen_parts
+                )
+            )
+        return " ".join(words) or base_name
 
     @staticmethod
     def _legacy_gpkg_path(state: dict[str, object]) -> Path | None:
