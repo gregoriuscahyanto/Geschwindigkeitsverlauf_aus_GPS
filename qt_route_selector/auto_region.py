@@ -49,42 +49,43 @@ STATIC_DATASET_ORDER = (
 DATASET_ORDER = list(STATIC_DATASET_ORDER)
 _DYNAMIC_DATASET_KEYS: set[str] = set()
 
-DISPLAY_LABELS = {
-    "austria": "Österreich (gesamt)",
-    "baden_wuerttemberg": "Baden-Württemberg",
-    "bayern": "Bayern",
-    "germany": "Deutschland (gesamt)",
-    "hessen": "Hessen",
-    "rheinland_pfalz": "Rheinland-Pfalz",
-    "switzerland": "Schweiz",
-    "dach": "DACH – grenzüberschreitend",
-}
+
+def _label_from_filename(filename: str, fallback: str) -> str:
+    """Create the user-visible region name exclusively from a local filename."""
+
+    name = Path(str(filename or "")).name
+    lower = name.lower()
+    if lower.endswith(".poly"):
+        name = name[:-5]
+    elif lower.endswith(".osm.pbf"):
+        name = name[:-8]
+    elif lower.endswith(".pbf"):
+        name = name[:-4]
+
+    name = name.strip() or str(fallback or "Lokales Gebiet")
+    return name.replace("_", " ").replace("-", " ").title()
 
 
 def dataset_label(dataset_key: str) -> str:
-    return DISPLAY_LABELS.get(
-        dataset_key,
-        str(DATASETS.get(dataset_key, {}).get("label", dataset_key)),
-    )
+    """Return a label derived from the dataset's POLY filename for every region."""
+
+    dataset = DATASETS.get(dataset_key, {})
+    poly_filename = str(dataset.get("poly_filename", "") or "")
+    if poly_filename:
+        return _label_from_filename(poly_filename, dataset_key)
+
+    # This fallback matters only for malformed catalog entries without a POLY
+    # filename. Normal built-in and dynamically discovered datasets never use it.
+    osm_filename = str(dataset.get("osm_filename", "") or "")
+    if osm_filename:
+        base = re.sub(r"-(?:latest|\d{6,8})$", "", Path(osm_filename).name[:-8])
+        return _label_from_filename(base, dataset_key)
+    return _label_from_filename(dataset_key, dataset_key)
 
 
 def _dynamic_dataset_key(base_name: str) -> str:
     key = re.sub(r"[^a-z0-9]+", "_", base_name.lower()).strip("_")
     return key or "local_dataset"
-
-
-def _dynamic_dataset_label(poly_path: Path, base_name: str) -> str:
-    try:
-        first_line = poly_path.read_text(
-            encoding="utf-8", errors="ignore"
-        ).splitlines()[0].strip()
-    except (OSError, IndexError):
-        first_line = ""
-
-    candidate = first_line if first_line and len(first_line) <= 80 else base_name
-    if candidate.lower() in {"polygon", "poly"}:
-        candidate = base_name
-    return candidate.replace("_", " ").replace("-", " ").strip().title()
 
 
 def _local_pbf_for_poly(osm_directory: Path, poly_path: Path) -> Path | None:
@@ -168,6 +169,11 @@ def discover_local_datasets(data_root: str | Path) -> tuple[str, ...]:
             (pbf_path.name.lower(), poly_path.name.lower())
         )
         if existing_key:
+            # Keep the catalog entry's filenames synchronized with the actual
+            # local pair, including dated PBFs replacing a previous latest PBF.
+            DATASETS[existing_key]["osm_filename"] = pbf_path.name
+            DATASETS[existing_key]["poly_filename"] = poly_path.name
+            DATASETS[existing_key]["label"] = _label_from_filename(poly_path.name, existing_key)
             if existing_key not in DATASET_ORDER:
                 DATASET_ORDER.append(existing_key)
             continue
@@ -178,6 +184,8 @@ def discover_local_datasets(data_root: str | Path) -> tuple[str, ...]:
         dynamic_key = dynamic_by_poly.get(poly_path.name.lower())
         if dynamic_key and dynamic_key in DATASETS:
             DATASETS[dynamic_key]["osm_filename"] = pbf_path.name
+            DATASETS[dynamic_key]["poly_filename"] = poly_path.name
+            DATASETS[dynamic_key]["label"] = _label_from_filename(poly_path.name, dynamic_key)
             filename_to_key[(pbf_path.name.lower(), poly_path.name.lower())] = dynamic_key
             continue
 
@@ -191,7 +199,7 @@ def discover_local_datasets(data_root: str | Path) -> tuple[str, ...]:
                 counter += 1
 
         DATASETS[dataset_key] = {
-            "label": _dynamic_dataset_label(poly_path, base_name),
+            "label": _label_from_filename(poly_path.name, base_name),
             "osm_url": "",
             "osm_md5_url": "",
             "osm_filename": pbf_path.name,
