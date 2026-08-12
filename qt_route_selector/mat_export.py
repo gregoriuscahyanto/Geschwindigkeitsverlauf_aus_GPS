@@ -151,9 +151,7 @@ def _add_record_arrays(
             if any(_is_number(value) for value in values):
                 payload.setdefault(
                     name,
-                    _double_vector(
-                        [np.nan if value is None else float(value) for value in values]
-                    ),
+                    _double_vector([np.nan if value is None else float(value) for value in values]),
                 )
             continue
 
@@ -248,9 +246,7 @@ def _stack_comparison_series(
             ):
                 payload.setdefault(
                     _safe_name(f"{prefix}_param_{key}"),
-                    _double_vector(
-                        [np.nan if value is None else float(value) for value in values]
-                    ),
+                    _double_vector([np.nan if value is None else float(value) for value in values]),
                 )
 
     series_paths = {
@@ -286,6 +282,121 @@ def _stack_comparison_series(
             )
 
 
+def _strip_prefixed_fields(
+    payload: Mapping[str, np.ndarray],
+    prefix: str,
+    *,
+    excluded_prefixes: tuple[str, ...] = (),
+    required_size: int | None = None,
+) -> dict[str, np.ndarray]:
+    fields: dict[str, np.ndarray] = {}
+    for name, value in payload.items():
+        if not name.startswith(prefix) or any(name.startswith(item) for item in excluded_prefixes):
+            continue
+        array = np.asarray(value, dtype=np.float64)
+        if required_size is not None and array.size != required_size:
+            continue
+        field = _safe_name(name[len(prefix):])
+        fields[field] = array
+    return fields
+
+
+def _build_sim_struct(
+    payload: Mapping[str, np.ndarray],
+    *,
+    n_time: int,
+    n_route: int,
+) -> dict[str, Any]:
+    """Group flat doubles by their natural reference axis for MATLAB users."""
+    time_names = {
+        "time_s", "distance_m", "lat_deg", "lon_deg", "elevation_m",
+        "curve_radius_m", "grade_pct", "v_kmh", "v_target_kmh", "a_mps2",
+        "v_road_limit_kmh", "v_surface_limit_kmh", "v_curve_limit_kmh",
+        "v_base_target_kmh", "v_planned_kmh", "v_actual_kmh", "v_noise_kmh",
+        "p_total_kw", "p_acceleration_kw", "p_grade_kw", "p_rolling_kw",
+        "p_air_kw", "p_trailer_kw", "p_traction_kw", "p_recuperation_kw",
+        "e_traction_cum_kwh", "e_recuperation_cum_kwh", "e_net_cum_kwh",
+    }
+    time_fields = {
+        name: payload[name]
+        for name in sorted(time_names)
+        if name in payload and np.asarray(payload[name]).size == n_time
+    }
+    for name, value in payload.items():
+        if name.startswith("time_") and np.asarray(value).size == n_time:
+            time_fields.setdefault(_safe_name(name[5:]), value)
+
+    route_fields = _strip_prefixed_fields(
+        payload,
+        "route_",
+        excluded_prefixes=(
+            "route_coordinate_", "route_meta_", "route_selection_", "route_summary_"
+        ),
+        required_size=n_route,
+    )
+
+    geometry_fields = _strip_prefixed_fields(payload, "route_coordinate_")
+    segment_fields = _strip_prefixed_fields(payload, "segment_")
+    osm_signal_fields = _strip_prefixed_fields(payload, "osm_signal_")
+    leg_fields = _strip_prefixed_fields(payload, "leg_")
+
+    traffic_fields = _strip_prefixed_fields(payload, "traffic_light_")
+    post_curve_fields = _strip_prefixed_fields(payload, "post_curve_")
+    overtaking_fields = _strip_prefixed_fields(payload, "overtaking_")
+    other_event_fields = _strip_prefixed_fields(payload, "event_")
+
+    load_positive = {
+        "time_share_pct": payload.get("load_pos_time_share_pct", np.empty((0, 1))),
+        "kw": payload.get("load_pos_kw", np.empty((0, 1))),
+    }
+    load_negative = {
+        "time_share_pct": payload.get("load_neg_time_share_pct", np.empty((0, 1))),
+        "kw": payload.get("load_neg_kw", np.empty((0, 1))),
+    }
+
+    scalar_energy = {
+        name[2:]: value
+        for name, value in payload.items()
+        if name.startswith("e_") and "_cum_" not in name and np.asarray(value).size == 1
+    }
+    power_summary = {
+        name[2:]: value
+        for name, value in payload.items()
+        if name.startswith("p_") and np.asarray(value).size == 1
+    }
+
+    parameters = _strip_prefixed_fields(payload, "param_")
+    summary = _strip_prefixed_fields(payload, "summary_")
+    comparison = _strip_prefixed_fields(payload, "comparison_")
+    route_info: dict[str, Any] = {
+        "metadata": _strip_prefixed_fields(payload, "route_meta_"),
+        "selection": _strip_prefixed_fields(payload, "route_selection_"),
+        "summary": _strip_prefixed_fields(payload, "route_summary_"),
+    }
+
+    return {
+        "time": time_fields,
+        "route": route_fields,
+        "geometry": geometry_fields,
+        "events": {
+            "traffic_lights": traffic_fields,
+            "post_curve": post_curve_fields,
+            "overtaking": overtaking_fields,
+            "other": other_event_fields,
+        },
+        "load": {"positive": load_positive, "negative": load_negative},
+        "energy": scalar_energy,
+        "power_summary": power_summary,
+        "segments": segment_fields,
+        "osm_signals": osm_signal_fields,
+        "legs": leg_fields,
+        "parameters": parameters,
+        "summary": summary,
+        "route_info": route_info,
+        "comparison": comparison,
+    }
+
+
 def export_matlab_simulation(
     result: Mapping[str, Any],
     output_path: str | Path,
@@ -298,7 +409,7 @@ def export_matlab_simulation(
     source_dem: str | Path | None = None,
     comparison: Mapping[str, Any] | None = None,
 ) -> Path:
-    """Export a compact MAT file made only of named MATLAB double arrays."""
+    """Export compact flat doubles plus one axis-grouped MATLAB struct ``sim``."""
     del source_route, source_dem
 
     path = Path(output_path).expanduser().resolve()
@@ -526,6 +637,7 @@ def export_matlab_simulation(
         ):
             _add_record_arrays("comparison_power", resistance, payload)
 
+    # Flat workspace variables remain individual double arrays.
     for key, value in list(payload.items()):
         array = np.asarray(value, dtype=np.float64)
         if array.ndim == 0:
@@ -534,5 +646,10 @@ def export_matlab_simulation(
             array = array.reshape(-1, 1)
         payload[key] = array
 
-    savemat(path, payload, appendmat=False, do_compression=True, long_field_names=True)
+    # In addition, provide one MATLAB struct that makes each reference axis explicit.
+    sim = _build_sim_struct(payload, n_time=n_time, n_route=n_route)
+    export_payload: dict[str, Any] = dict(payload)
+    export_payload["sim"] = sim
+
+    savemat(path, export_payload, appendmat=False, do_compression=True, long_field_names=True)
     return path
