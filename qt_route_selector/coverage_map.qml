@@ -47,6 +47,12 @@ Item {
         return "#6e747c"
     }
 
+    onCoverageAreasChanged: {
+        if (coverageAreas && coverageAreas.length > 0) {
+            fitTimer.restart()
+        }
+    }
+
     Plugin {
         id: osmPlugin
         name: "osm"
@@ -74,6 +80,17 @@ Item {
         PluginParameter {
             name: "osm.useragent"
             value: "GeschwindigkeitsverlaufAusGPS/0.8 (coverage map)"
+        }
+    }
+
+    Timer {
+        id: fitTimer
+        interval: 120
+        repeat: false
+        onTriggered: {
+            if (root.coverageAreas && root.coverageAreas.length > 0) {
+                coverageMap.fitViewportToMapItems()
+            }
         }
     }
 
