@@ -17,11 +17,15 @@ from PySide6.QtWidgets import (
 
 try:
     from .complete_app_base import *  # noqa: F401,F403
-    from .complete_app_base import CompleteApplicationWindow as _BaseWindow
+    from .complete_app_base import (
+        DATASETS,
+        CompleteApplicationWindow as _BaseWindow,
+        cached_dataset,
+    )
     from .runtime_paths import data_dir, prepare_runtime_directories, route_result_path, state_dir
 except ImportError:
     from complete_app_base import *  # type: ignore  # noqa: F401,F403
-    from complete_app_base import CompleteApplicationWindow as _BaseWindow
+    from complete_app_base import DATASETS, CompleteApplicationWindow as _BaseWindow, cached_dataset
     from runtime_paths import data_dir, prepare_runtime_directories, route_result_path, state_dir
 
 
@@ -115,6 +119,93 @@ class CompleteApplicationWindow(_BaseWindow):
                 item.setProperty("visible", False)
                 item.setProperty("enabled", False)
                 self.manual_road_data_button_hidden = True
+
+    def _clear_stale_automatic_routing_data(self) -> None:
+        """Prevent a previously active regional GPKG from routing a new region."""
+        selector = self.route_selector
+        old_pbf = bool(selector.isPbfSource)
+        selector._roads_file = ""
+        selector.settings.remove("roads_file")
+        selector.roadsFileChanged.emit()
+        if old_pbf != bool(selector.isPbfSource):
+            selector.pbfSourceChanged.emit()
+        selector.automaticOfflineReloadChanged.emit()
+        selector.mapRoadsChanged.emit([])
+        selector.mapSummaryChanged.emit({})
+
+        self._active_dataset_key = ""
+        self._pending_dem_file = ""
+        selector.settings.remove("active_dataset_key")
+        selector.selectionChanged.emit(selector._selection_payload())
+        self._refresh_coverage_if_ready()
+
+    def _region_detected(self, dataset_key: str) -> None:
+        """Switch datasets safely instead of retaining an unrelated old GPKG."""
+        if dataset_key in DATASETS:
+            cached = cached_dataset(dataset_key, self.data_root)
+            if cached is None and self._active_dataset_key != dataset_key:
+                self._clear_stale_automatic_routing_data()
+        super()._region_detected(dataset_key)
+
+    def _start_dataset_preparation(self, dataset_key: str, *, confirm_large: bool) -> None:
+        """Use a country-specific confirmation instead of calling every fallback DACH."""
+        if not confirm_large:
+            super()._start_dataset_preparation(dataset_key, confirm_large=False)
+            return
+
+        cached = cached_dataset(dataset_key, self.data_root)
+        if cached is not None:
+            self._activate_prepared_data(cached, restored=True)
+            return
+
+        if dataset_key == "dach":
+            title = "Großer grenzüberschreitender Datensatz"
+            question = (
+                "Die gewählten Punkte liegen in mehr als einem DACH-Land. Für eine durchgehende "
+                "Route benötigt die App deshalb den gemeinsamen DACH-Datensatz (Deutschland, "
+                "Österreich, Schweiz). Dieser Download ist mehrere GB groß, wird aber nur einmal "
+                "benötigt und danach lokal als GPKG wiederverwendet.\n\n"
+                "DACH jetzt automatisch herunterladen und vorbereiten?"
+            )
+            declined = (
+                "Grenzroute erkannt, aber DACH wurde nicht vorbereitet. Die Punkte bleiben "
+                "erhalten; ändere einen Punkt, um die Automatik erneut zu starten."
+            )
+        elif dataset_key == "germany":
+            title = "Großer Deutschland-Datensatz"
+            question = (
+                "Die gewählten Punkte liegen innerhalb Deutschlands, aber nicht gemeinsam in "
+                "einem kleineren unterstützten Regionalextrakt. Deshalb wird Deutschland (gesamt) "
+                "benötigt. Dieser Download ist mehrere GB groß, wird aber nur einmal benötigt und "
+                "danach lokal als GPKG wiederverwendet.\n\n"
+                "Deutschland jetzt automatisch herunterladen und vorbereiten?"
+            )
+            declined = (
+                "Deutschland wurde erkannt, aber der große Deutschland-Datensatz wurde nicht "
+                "vorbereitet. Die Punkte bleiben erhalten; ändere einen Punkt, um die Automatik "
+                "erneut zu starten."
+            )
+        else:
+            title = "Großer Routingdatensatz"
+            question = (
+                f"{dataset_label(dataset_key)} benötigt einen großen OSM-Datensatz. "
+                "Jetzt automatisch herunterladen und vorbereiten?"
+            )
+            declined = f"{dataset_label(dataset_key)} wurde nicht vorbereitet."
+
+        answer = QMessageBox.question(
+            self,
+            title,
+            question,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.data_status.setText(declined)
+            self.data_progress.setValue(0)
+            return
+
+        super()._start_dataset_preparation(dataset_key, confirm_large=False)
 
     @staticmethod
     def _loading_placeholder(title: str, detail: str) -> tuple[QWidget, QLabel, QProgressBar]:
