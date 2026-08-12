@@ -93,7 +93,8 @@ class CoverageTab(QWidget):
             "<b>Kartenfarben</b><br>"
             "<span style='color:#175a9e'>■</span> OSM-PBF vorhanden<br>"
             "<span style='color:#216b2d'>■</span> Routing-GPKG bereit<br>"
-            "<span style='color:#9b5b00'>■</span> GPKG älter als PBF",
+            "<span style='color:#9b5b00'>■</span> GPKG älter als PBF<br>"
+            "<b>ALT</b> = alter unversionierter Routing-GPKG",
             side,
         )
         legend.setTextFormat(Qt.TextFormat.RichText)
@@ -134,6 +135,42 @@ class CoverageTab(QWidget):
     def _is_available(state: dict[str, object]) -> bool:
         return bool(state["poly_ready"]) and bool(state["pbf_ready"])
 
+    @staticmethod
+    def _display_label(state: dict[str, object]) -> str:
+        label = str(state.get("label", "") or "").strip()
+        if label and label.lower() not in {"none", "null", "polygon", "poly"}:
+            return label
+
+        poly_path = Path(str(state.get("poly_file", "") or ""))
+        base_name = poly_path.stem.strip()
+        if not base_name:
+            return "Lokales Gebiet"
+        return base_name.replace("_", " ").replace("-", " ").title()
+
+    @staticmethod
+    def _legacy_gpkg_path(state: dict[str, object]) -> Path | None:
+        pbf_text = str(state.get("pbf_file", "") or "").strip()
+        if not pbf_text:
+            return None
+        pbf_path = Path(pbf_text)
+        base = pbf_path.name
+        if base.lower().endswith(".osm.pbf"):
+            base = base[:-8]
+        elif base.lower().endswith(".pbf"):
+            base = base[:-4]
+        return pbf_path.with_name(f"{base}_routing.gpkg")
+
+    @classmethod
+    def _gpkg_mark(cls, state: dict[str, object]) -> str:
+        if bool(state.get("gpkg_ready")):
+            return "✓"
+        if bool(state.get("gpkg_exists")):
+            return "ALT"
+        legacy_path = cls._legacy_gpkg_path(state)
+        if legacy_path is not None and legacy_path.is_file() and legacy_path.stat().st_size > 0:
+            return "ALT"
+        return "–"
+
     def _osm_directory_changed(self, _path: str) -> None:
         self.refresh()
 
@@ -166,10 +203,10 @@ class CoverageTab(QWidget):
             available_count += 1
             active = "▶ " if dataset_key == self.active_dataset_key else "  "
             lines.append(
-                f"{active}{state['label']}\n"
+                f"{active}{self._display_label(state)}\n"
                 f"    POLY {self._mark(bool(state['poly_ready']))}   "
                 f"PBF {self._mark(bool(state['pbf_ready']))}   "
-                f"GPKG {self._mark(bool(state['gpkg_ready']))}"
+                f"GPKG {self._gpkg_mark(state)}"
             )
 
         if lines:
@@ -185,5 +222,6 @@ class CoverageTab(QWidget):
         else:
             self.note_label.setText(
                 "▶ kennzeichnet den aktuell fürs Routing aktivierten Datensatz. "
-                "Neue Gebiete erscheinen automatisch, sobald POLY und PBF lokal vorhanden sind."
+                "Neue Gebiete erscheinen automatisch, sobald POLY und PBF lokal vorhanden sind. "
+                "ALT kennzeichnet einen älteren Routing-GPKG; der aktuelle Cache wird bei Bedarf aus der PBF neu aufgebaut."
             )
