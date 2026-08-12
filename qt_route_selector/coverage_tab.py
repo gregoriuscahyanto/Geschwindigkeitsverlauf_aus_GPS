@@ -15,12 +15,14 @@ from PySide6.QtWidgets import (
 
 try:
     from .auto_region import (
+        DATASETS,
         DATASET_ORDER,
         coverage_snapshot,
         dataset_storage_state,
     )
 except ImportError:
     from auto_region import (
+        DATASETS,
         DATASET_ORDER,
         coverage_snapshot,
         dataset_storage_state,
@@ -145,7 +147,12 @@ class CoverageTab(QWidget):
         base_name = poly_path.stem.strip()
         if not base_name:
             return "Lokales Gebiet"
-        return base_name.replace("_", " ").replace("-", " ").title()
+        derived = base_name.replace("_", " ").replace("-", " ").title()
+
+        dataset_key = str(state.get("dataset", "") or "")
+        if dataset_key in DATASETS:
+            DATASETS[dataset_key]["label"] = derived
+        return derived
 
     @staticmethod
     def _legacy_gpkg_path(state: dict[str, object]) -> Path | None:
