@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+# Bump when the set of cached road classes/columns changes. The version is part
+# of the filename so an older GPKG cannot silently be reused after an upgrade.
+ROUTING_CACHE_FORMAT_VERSION = 2
+
 ALLOWED_CAR_HIGHWAYS = {
     "motorway",
     "motorway_link",
@@ -20,6 +24,10 @@ ALLOWED_CAR_HIGHWAYS = {
     "residential",
     "living_street",
     "service",
+    # OSM uses highway=raceway for dedicated motor-racing circuits such as
+    # the Nürburgring Nordschleife. These must be present in the graph when a
+    # user deliberately places routing points on the circuit.
+    "raceway",
 }
 
 _CACHE_COLUMNS = (
@@ -48,7 +56,45 @@ def default_cache_path(source: str | Path) -> Path:
         base = base[:-8]
     elif base.lower().endswith(".pbf"):
         base = base[:-4]
-    return path.with_name(f"{base}_routing.gpkg")
+    return path.with_name(f"{base}_routing_v{ROUTING_CACHE_FORMAT_VERSION}.gpkg")
+
+
+def _cache_version_path(cache_path: str | Path) -> Path:
+    path = Path(cache_path).expanduser().resolve()
+    return path.with_name(path.name + ".version")
+
+
+def routing_cache_is_current(source: str | Path, cache_path: str | Path | None = None) -> bool:
+    """Return True only for a current PBF-derived cache with matching format version."""
+
+    source_path = Path(source).expanduser().resolve()
+    cache = (
+        Path(cache_path).expanduser().resolve()
+        if cache_path is not None
+        else default_cache_path(source_path)
+    )
+    if not source_path.is_file() or source_path.stat().st_size <= 0:
+        return False
+    if not cache.is_file() or cache.stat().st_size <= 0:
+        return False
+    if cache.stat().st_mtime_ns < source_path.stat().st_mtime_ns:
+        return False
+
+    marker = _cache_version_path(cache)
+    if not marker.is_file():
+        return False
+    try:
+        version = int(marker.read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return False
+    return version == ROUTING_CACHE_FORMAT_VERSION
+
+
+def _write_cache_version(cache_path: Path) -> None:
+    marker = _cache_version_path(cache_path)
+    temporary = marker.with_name(marker.name + ".tmp")
+    temporary.write_text(str(ROUTING_CACHE_FORMAT_VERSION), encoding="ascii")
+    os.replace(temporary, marker)
 
 
 def build_routing_cache(
@@ -197,6 +243,7 @@ def build_routing_cache(
         handler.apply_file(str(source_path), locations=True, idx="flex_mem")
         handler.finish()
         os.replace(temporary_path, output_path)
+        _write_cache_version(output_path)
     except Exception:
         if temporary_path.exists():
             temporary_path.unlink()

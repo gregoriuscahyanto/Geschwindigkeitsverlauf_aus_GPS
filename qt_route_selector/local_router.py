@@ -24,6 +24,14 @@ DEFAULT_SPEED_KMH = {
     "living_street": 10.0,
     "service": 20.0,
     "track": 15.0,
+    # A motor-racing circuit without an OSM maxspeed must not acquire a
+    # fabricated public-road limit. The simulation can then be constrained by
+    # driver/curve dynamics. Routing itself uses a separate finite assumption.
+    "raceway": math.inf,
+}
+
+ROUTING_ASSUMED_SPEED_KMH = {
+    "raceway": 100.0,
 }
 
 ROAD_PRIORITY_FACTOR = {
@@ -42,6 +50,10 @@ ROAD_PRIORITY_FACTOR = {
     "living_street": 1.50,
     "service": 1.55,
     "track": 1.80,
+    # Keep raceways less attractive than normal roads for the default
+    # 'preferred' profile; deliberate track routes still work when points are
+    # placed on the circuit, and 'shortest' remains purely geometric.
+    "raceway": 1.65,
 }
 
 ROUTING_PROFILE_WEIGHTS = {
@@ -116,20 +128,38 @@ def _parse_maxspeed(value: Any, highway: str) -> float:
     return DEFAULT_SPEED_KMH.get(highway, 30.0)
 
 
+def _routing_speed_kmh(maxspeed_kmh: float, highway: str) -> float:
+    if math.isfinite(maxspeed_kmh):
+        return max(5.0, float(maxspeed_kmh))
+    return max(5.0, float(ROUTING_ASSUMED_SPEED_KMH.get(highway, 100.0)))
+
+
 def _is_blocked(record: dict[str, Any]) -> bool:
-    values = (
-        record.get("motor_vehicle"),
-        record.get("vehicle"),
-        record.get("access"),
-    )
+    highway = _text(record.get("highway")).lower()
+    motor_vehicle = _text(record.get("motor_vehicle")).lower()
+    vehicle = _text(record.get("vehicle")).lower()
+    access = _text(record.get("access")).lower()
     blocked = {"no", "private"}
     allowed = {"yes", "permissive", "destination", "customers", "delivery"}
 
-    for value in values:
-        text = _text(value).lower()
-        if text in allowed:
+    # A dedicated raceway is inherently not an ordinary public road. For the
+    # simulation use case, a generic access=private must therefore not remove
+    # the entire circuit from the graph. Explicit vehicle/motor_vehicle blocks
+    # and access=no are still respected.
+    if highway == "raceway":
+        for value in (motor_vehicle, vehicle):
+            if value in allowed:
+                return False
+            if value in blocked:
+                return True
+        if access == "no":
+            return True
+        return False
+
+    for value in (motor_vehicle, vehicle, access):
+        if value in allowed:
             return False
-        if text in blocked:
+        if value in blocked:
             return True
     return False
 
@@ -263,6 +293,8 @@ def _road_reference_kind(reference: str) -> str:
 
 
 def _road_category(highway: str, reference: str) -> str:
+    if highway == "raceway":
+        return "raceway"
     ref_kind = _road_reference_kind(reference)
     if highway.startswith("motorway") or ref_kind == "A":
         return "autobahn"
@@ -324,7 +356,7 @@ def _build_graph(roads: Any) -> tuple[Any, dict[tuple[float, float], tuple[float
             ),
             highway,
         )
-        speed_mps = maxspeed / 3.6
+        speed_mps = _routing_speed_kmh(maxspeed, highway) / 3.6
         direction = _oneway_mode(record)
         priority_factor = _road_priority_factor(highway, reference)
         common = {

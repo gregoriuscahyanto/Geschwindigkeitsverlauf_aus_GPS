@@ -36,6 +36,7 @@ ROAD_RANK = {
     "unclassified": 3,
     "residential": 3,
     "living_street": 2,
+    "raceway": 2,
     "service": 1,
     "track": 0,
 }
