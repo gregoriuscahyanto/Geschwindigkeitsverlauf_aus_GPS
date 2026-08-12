@@ -11,7 +11,7 @@ from qt_route_selector.mat_export import export_matlab_simulation
 
 
 class MatlabExportTests(unittest.TestCase):
-    def test_export_contains_only_compact_individual_double_arrays(self) -> None:
+    def test_export_contains_compact_doubles_and_axis_grouped_struct(self) -> None:
         distance_m = np.asarray([0.0, 50.0, 100.0])
         result = {
             "parameters": {"vehicle_mass_kg": 1800.0, "trailer_enabled": False},
@@ -108,10 +108,16 @@ class MatlabExportTests(unittest.TestCase):
             self.assertEqual(output.suffix, ".mat")
             self.assertTrue(output.is_file())
             loaded = loadmat(output)
+            simplified = loadmat(output, simplify_cells=True)
 
         variables = {key: value for key, value in loaded.items() if not key.startswith("__")}
         self.assertTrue(variables)
+        self.assertIn("sim", variables)
+
+        # Every flat top-level signal remains a MATLAB double. Only sim is a struct.
         for name, value in variables.items():
+            if name == "sim":
+                continue
             self.assertIsInstance(value, np.ndarray, name)
             self.assertEqual(value.dtype, np.dtype(np.float64), name)
 
@@ -164,9 +170,28 @@ class MatlabExportTests(unittest.TestCase):
         self.assertTrue(required.issubset(variables.keys()), required - variables.keys())
 
         # Compactness is part of the contract: records are columns, not thousands of scalars.
-        self.assertLess(len(variables), 120)
+        self.assertLess(len(variables), 121)
         self.assertFalse(any(name.startswith("route_extra_") for name in variables))
         self.assertFalse(any("post_curve_overshoot_1_" in name for name in variables))
+
+        # Time-axis signals share exactly one length.
+        time_axis_names = {
+            "time_s", "distance_m", "v_kmh", "v_target_kmh", "a_mps2",
+            "elevation_m", "curve_radius_m", "grade_pct", "p_total_kw",
+            "p_acceleration_kw", "p_grade_kw", "p_rolling_kw", "p_air_kw",
+            "p_trailer_kw", "p_traction_kw", "p_recuperation_kw",
+            "e_traction_cum_kwh", "e_recuperation_cum_kwh", "e_net_cum_kwh",
+        }
+        self.assertEqual({variables[name].size for name in time_axis_names}, {3})
+
+        # Route-axis signals share the independent spatial route length.
+        route_axis_names = {
+            "route_distance_m", "route_lat_deg", "route_lon_deg",
+            "route_elevation_m", "route_curve_radius_m", "route_grade_pct",
+            "route_v_road_limit_kmh", "route_v_curve_limit_kmh",
+            "route_post_curve_boost_kmh",
+        }
+        self.assertEqual({variables[name].size for name in route_axis_names}, {3})
 
         np.testing.assert_allclose(variables["time_s"].ravel(), [0.0, 5.0, 10.0])
         np.testing.assert_allclose(variables["v_kmh"].ravel(), [0.0, 33.0, 0.0])
@@ -182,6 +207,33 @@ class MatlabExportTests(unittest.TestCase):
         self.assertAlmostEqual(float(variables["param_vehicle_mass_kg"].ravel()[0]), 1800.0)
         self.assertEqual(float(variables["param_trailer_enabled"].ravel()[0]), 0.0)
         self.assertAlmostEqual(float(variables["osm_signal_osm_id"].ravel()[0]), 12345.0)
+
+        # The struct makes the natural reference axes explicit without MATLAB itself.
+        sim = simplified["sim"]
+        self.assertIsInstance(sim, dict)
+        self.assertIn("time", sim)
+        self.assertIn("route", sim)
+        self.assertIn("geometry", sim)
+        self.assertIn("events", sim)
+        self.assertIn("load", sim)
+        self.assertIn("segments", sim)
+        self.assertIn("parameters", sim)
+        self.assertIn("summary", sim)
+
+        np.testing.assert_allclose(np.asarray(sim["time"]["time_s"]).ravel(), [0.0, 5.0, 10.0])
+        np.testing.assert_allclose(np.asarray(sim["time"]["v_kmh"]).ravel(), [0.0, 33.0, 0.0])
+        np.testing.assert_allclose(np.asarray(sim["route"]["elevation_m"]).ravel(), elevation_m)
+        np.testing.assert_allclose(
+            np.asarray(sim["route"]["curve_radius_m"]).ravel(), [np.inf, 42.0, np.inf]
+        )
+        np.testing.assert_allclose(
+            np.asarray(sim["events"]["post_curve"]["curve_exit_m"]).ravel(), [50.0, 80.0]
+        )
+        np.testing.assert_allclose(
+            np.asarray(sim["segments"]["distance_m"]).ravel(), [50.0, 50.0]
+        )
+        self.assertAlmostEqual(float(sim["parameters"]["vehicle_mass_kg"]), 1800.0)
+        self.assertAlmostEqual(float(sim["summary"]["average_speed_kmh"]), 12.0)
 
 
 if __name__ == "__main__":
