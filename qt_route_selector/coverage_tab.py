@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Qt
+from PySide6.QtCore import QFileSystemWatcher, QUrl, Qt
 from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtWidgets import (
     QFrame,
@@ -44,6 +44,12 @@ class CoverageTab(QWidget):
         self.data_root = Path(data_root).expanduser().resolve()
         self.active_dataset_key = active_dataset_key
 
+        self.osm_directory = self.data_root / "osm"
+        self.osm_directory.mkdir(parents=True, exist_ok=True)
+        self.directory_watcher = QFileSystemWatcher(self)
+        self.directory_watcher.addPath(str(self.osm_directory))
+        self.directory_watcher.directoryChanged.connect(self._osm_directory_changed)
+
         root_layout = QHBoxLayout(self)
         root_layout.setContentsMargins(6, 6, 6, 6)
         root_layout.setSpacing(10)
@@ -76,6 +82,7 @@ class CoverageTab(QWidget):
         intro = QLabel(
             "Angezeigt werden nur Gebiete, für die sowohl die Gebietsgrenze (.poly) "
             "als auch die OSM-PBF-Datei lokal im data-Ordner vorhanden sind. "
+            "Neue passende Dateipaare werden automatisch erkannt. "
             "Es wird in diesem Tab nichts zusätzlich heruntergeladen.",
             side,
         )
@@ -126,6 +133,9 @@ class CoverageTab(QWidget):
     @staticmethod
     def _is_available(state: dict[str, object]) -> bool:
         return bool(state["poly_ready"]) and bool(state["pbf_ready"])
+
+    def _osm_directory_changed(self, _path: str) -> None:
+        self.refresh()
 
     def refresh(self, *, active_dataset_key: str | None = None) -> None:
         if active_dataset_key is not None:
