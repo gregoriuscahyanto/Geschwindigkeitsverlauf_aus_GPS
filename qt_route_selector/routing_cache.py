@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-# Bump when the set of cached road classes/columns changes. Existing GPKGs
-# without the matching marker are rebuilt automatically from the local PBF.
+# Bump when the set of cached road classes/columns changes. The version is part
+# of the filename so an older GPKG cannot silently be reused after an upgrade.
 ROUTING_CACHE_FORMAT_VERSION = 2
 
 ALLOWED_CAR_HIGHWAYS = {
@@ -56,7 +56,7 @@ def default_cache_path(source: str | Path) -> Path:
         base = base[:-8]
     elif base.lower().endswith(".pbf"):
         base = base[:-4]
-    return path.with_name(f"{base}_routing.gpkg")
+    return path.with_name(f"{base}_routing_v{ROUTING_CACHE_FORMAT_VERSION}.gpkg")
 
 
 def _cache_version_path(cache_path: str | Path) -> Path:
