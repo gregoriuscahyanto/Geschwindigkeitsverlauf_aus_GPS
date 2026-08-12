@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
-from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QSettings, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -25,6 +25,7 @@ try:
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
     from .runtime_paths import exports_dir
+    from .structure_elevation import correct_structure_elevation
 except ImportError:
     from _internal.simulation_layers import integrated_speed_profile as _base_layer
     from _internal.simulation_layers.integrated_speed_profile import _osm_only_event_positions
@@ -32,6 +33,7 @@ except ImportError:
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
     from runtime_paths import exports_dir
+    from structure_elevation import correct_structure_elevation
 
 # The implementation layers live below _internal, while QML resources remain
 # next to the public application modules.
@@ -65,12 +67,95 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
     """Public simulation window with the compact current application shell."""
 
     def __init__(self, route_path: str | Path | None = None) -> None:
+        # super().__init__ may already build plots and therefore call the
+        # overridden _spatial_elevation method. Initialize this cache first.
+        self._structure_elevation_cache_key: tuple | None = None
+        self._structure_elevation_cache_values: np.ndarray | None = None
+        self._structure_elevation_stats: dict[str, int] = {}
         super().__init__(route_path)
         self._mat_export_thread: QThread | None = None
         self._mat_export_worker: _MatExportWorker | None = None
         self._mat_export_button: QPushButton | None = None
         self._merge_summary_cards()
         self._configure_mat_export_ui()
+
+    def _spatial_elevation(self, sample_distance: np.ndarray) -> np.ndarray:
+        """Use DEM/GPX heights, but not terrain heights inside tunnels/on bridges."""
+
+        elevation = np.asarray(super()._spatial_elevation(sample_distance), dtype=float).reshape(-1)
+        distance = np.asarray(sample_distance, dtype=float).reshape(-1)
+        if elevation.size != distance.size or elevation.size < 2:
+            return elevation
+        if np.count_nonzero(np.isfinite(elevation)) < 2:
+            return elevation
+
+        settings = QSettings("GPSDrivingSimulation", "QtRouteSelector")
+        roads_file = str(settings.value("roads_file", "") or "").strip()
+        roads_path = Path(roads_file).expanduser().resolve() if roads_file else None
+        if roads_path is None or not roads_path.is_file():
+            return elevation
+
+        route_sample_coordinates = getattr(self, "_route_sample_coordinates", None)
+        if not callable(route_sample_coordinates):
+            return elevation
+        coordinates = route_sample_coordinates(distance)
+        if coordinates is None:
+            return elevation
+        latitude, longitude = coordinates
+        latitude = np.asarray(latitude, dtype=float).reshape(-1)
+        longitude = np.asarray(longitude, dtype=float).reshape(-1)
+        if latitude.size != distance.size or longitude.size != distance.size:
+            return elevation
+
+        try:
+            stat = roads_path.stat()
+            cache_key = (
+                str(roads_path),
+                stat.st_mtime_ns,
+                stat.st_size,
+                str(getattr(self, "_route_path", "")),
+                int(getattr(self, "_last_route_mtime_ns", 0) or 0),
+                distance.size,
+                round(float(distance[0]), 3),
+                round(float(distance[-1]), 3),
+            )
+        except OSError:
+            return elevation
+
+        if (
+            self._structure_elevation_cache_key == cache_key
+            and self._structure_elevation_cache_values is not None
+        ):
+            return self._structure_elevation_cache_values.copy()
+
+        try:
+            corrected, stats = correct_structure_elevation(
+                roads_path,
+                distance,
+                latitude,
+                longitude,
+                elevation,
+            )
+        except Exception:
+            return elevation
+
+        self._structure_elevation_cache_key = cache_key
+        self._structure_elevation_cache_values = np.asarray(corrected, dtype=float).copy()
+        self._structure_elevation_stats = dict(stats)
+
+        corrected_runs = int(stats.get("corrected_runs", 0) or 0)
+        if corrected_runs:
+            tunnel_points = int(stats.get("tunnel_points", 0) or 0)
+            bridge_points = int(stats.get("bridge_points", 0) or 0)
+            label = getattr(self, "dem_status_label", None)
+            if isinstance(label, QLabel):
+                base = label.text().split(" | OSM-Strukturen:", 1)[0]
+                label.setText(
+                    f"{base} | OSM-Strukturen: {corrected_runs} Abschnitt(e) korrigiert "
+                    f"({tunnel_points} Tunnel-, {bridge_points} Brücken-Stützpunkte)."
+                )
+
+        return self._structure_elevation_cache_values.copy()
 
     def _merge_summary_cards(self) -> None:
         """Show route statistics and energy in one responsive summary card."""
