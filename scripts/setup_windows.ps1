@@ -78,7 +78,7 @@ if ($OfflineWheels.Count -gt 0) {
 
 # Fail early if a core runtime dependency is missing. This gives a clearer
 # setup error than discovering it later when the simulation tab is opened.
-& $PythonExe -c "import PySide6, pyqtgraph, numpy, pandas, geopandas, rasterio; print('Python-Umgebung OK')"
+& $PythonExe -c "import PySide6, pyqtgraph, numpy, scipy, pandas, geopandas, rasterio; print('Python-Umgebung OK')"
 if ($LASTEXITCODE -ne 0) { throw "Die Python-Umgebung ist unvollständig." }
 
 Write-Host ""

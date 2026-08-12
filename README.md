@@ -143,78 +143,101 @@ Das verwendete Höhenmodell beschreibt die Geländeoberfläche. Dadurch können 
 
 ## Installation / Einrichtung unter Windows
 
-Die Anwendung benötigt **Python 3.11 (64 Bit)**. Adminrechte sind nicht erforderlich. Es wird nichts nach `Program Files` installiert: Das Setup legt lediglich eine lokale `.venv` im Projektverzeichnis an und installiert dort die Python-Abhängigkeiten.
+Die Anwendung benötigt **Python 3.11 (64 Bit)**. Adminrechte sind nicht erforderlich. Das Setup legt eine lokale `.venv` im Projektordner an.
 
-Für den Benutzer soll die Einrichtung möglichst immer gleich aussehen:
+Normale Einrichtung:
 
 ```powershell
 .\scripts\setup_windows.ps1
 ```
 
-Das Skript erkennt automatisch, ob ein lokales `wheelhouse` vorhanden ist:
-
-- **mit `wheelhouse`**: vollständig lokale Installation ohne Zugriff auf PyPI,
-- **ohne `wheelhouse`**: normale Installation über den konfigurierten Python-Paketindex.
-
-Nach erfolgreicher Einrichtung kann direkt gestartet werden:
+Danach starten:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-python -m qt_route_selector
+& ".\.venv\Scripts\python.exe" -m qt_route_selector
 ```
 
-Oder Einrichtung und Start in einem Schritt:
+### Enterprise-PC ohne Internet / hinter Firewall
 
-```powershell
-.\scripts\setup_windows.ps1 -Run
-```
+Der Enterprise-PC braucht nur **Python 3.11 (64 Bit)**. Alle Python-Pakete sowie OSM-, Routing- und Höhendaten können vorher auf einem anderen Windows-PC vorbereitet und anschließend komplett kopiert werden.
 
-### Enterprise-PC ohne Zugriff auf PyPI
+#### 1. Auf einem Windows-PC mit Internet vorbereiten
 
-Wenn der Enterprise-PC Python ausführen darf, aber PyPI bzw. `pip install` über das Internet blockiert ist, wird ein **Offline-Wheelhouse** verwendet. Darin liegen alle benötigten Pakete einschließlich ihrer Unterabhängigkeiten bereits als Windows-Wheels. Dadurch müssen keine Bibliotheken einzeln von pypi.org heruntergeladen werden.
-
-Das Wheelhouse wird **einmal auf einem Windows-PC mit Internetzugang und Python 3.11 64 Bit** vorbereitet:
+Im Projektordner ausführen:
 
 ```powershell
 .\scripts\build_offline_dependencies.ps1
 ```
 
-Das Skript liest `requirements.txt`, lädt automatisch alle direkten und transitiven Abhängigkeiten als Binär-Wheels und legt sie hier ab:
+Dadurch entsteht der Ordner:
 
 ```text
 <Repository>\wheelhouse\
 ```
 
-Vor einem Neuaufbau wird ein vorhandenes Wheelhouse entfernt, damit keine veralteten Paketversionen übrig bleiben. Zusätzlich wird eine `MANIFEST.txt` mit Zielplattform, Hash der `requirements.txt` und den enthaltenen Wheel-Dateien erzeugt.
+Er enthält alle Python-Pakete für die Offline-Installation.
 
-Danach wird der **gesamte Projektordner inklusive `wheelhouse`** auf den Enterprise-PC kopiert. Dort genügt wieder der normale Einrichtungsbefehl:
+Danach in der Anwendung einmal die Gebiete bzw. Routen vorbereiten, die später auf dem Enterprise-PC benötigt werden. Die bereits heruntergeladenen Daten liegen hier:
+
+```text
+%LOCALAPPDATA%\GPS-Routenplaner\data\
+```
+
+Darin befinden sich je nach vorbereitetem Gebiet unter anderem:
+
+```text
+OSM-PBF
+POLY
+Routing-GPKG
+Höhendaten / DEM
+```
+
+#### 2. Auf den Enterprise-PC kopieren
+
+Zwei Dinge kopieren:
+
+1. den **gesamten Projektordner inklusive `wheelhouse`**
+2. den kompletten Ordner
+
+```text
+%LOCALAPPDATA%\GPS-Routenplaner\data\
+```
+
+Die `.venv` muss nicht kopiert werden.
+
+Auf dem Enterprise-PC die Geodaten wieder hier ablegen:
+
+```text
+%LOCALAPPDATA%\GPS-Routenplaner\data\
+```
+
+Der Zielordner kann bei Bedarf einfach angelegt werden.
+
+#### 3. Auf dem Enterprise-PC installieren
+
+PowerShell im kopierten Projektordner öffnen und ausführen:
 
 ```powershell
 .\scripts\setup_windows.ps1
 ```
 
-Das Setup erkennt die lokalen Wheels automatisch und verwendet intern ausschließlich:
+Das Setup erkennt das `wheelhouse` automatisch und installiert die Python-Pakete **nur aus den lokalen Dateien**. Für die Installation wird kein Zugriff auf PyPI benötigt.
 
-```text
---no-index --find-links <Repository>\wheelhouse
+#### 4. Starten
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m qt_route_selector
 ```
 
-Damit findet während der Installation **kein Zugriff auf PyPI** statt.
+Damit arbeitet die Anwendung mit den mitkopierten lokalen OSM-, Routing- und Höhendaten.
 
-Der Benutzer muss also auf dem Enterprise-PC keine einzelnen Pakete suchen, keine URLs kennen und keine `pip install`-Befehle selbst eingeben.
+> Wichtig: Für Gebiete, deren PBF-/Routing-/Höhendaten nicht mitkopiert wurden, kann die Anwendung normalerweise einen Download anfordern. Hinter einer Firewall schlägt dieser Download gegebenenfalls fehl. Deshalb alle benötigten Gebiete vorher auf dem Internet-PC vorbereiten und den kompletten `data`-Ordner kopieren.
 
-> **Wichtig:** Dieser Offline-Weg setzt voraus, dass das in der lokalen Python-Umgebung enthaltene `pip` grundsätzlich ausgeführt werden darf. Es wird dabei nur als lokaler Paketinstaller verwendet und greift nicht auf das Internet zu. Wenn eine Unternehmensrichtlinie die Ausführung von `pip` selbst vollständig verbietet, ist dafür eine Freigabe durch die IT oder ein anderes, zentral freigegebenes Deployment-Verfahren erforderlich.
+> Falls die Unternehmensrichtlinie die Ausführung von `pip` selbst verbietet, muss die lokale Installation durch die IT freigegeben oder zentral bereitgestellt werden. Das Offline-Setup verwendet `pip` nur lokal und greift nicht auf das Internet zu.
 
 ### Wenn PowerShell die Aktivierung blockiert
 
-Falls nur die PowerShell Execution Policy die Aktivierung der `.venv` verhindert, kann sie für das aktuelle Terminal gesetzt werden:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
-.\.venv\Scripts\Activate.ps1
-```
-
-Alternativ ist keine Aktivierung erforderlich. Die Anwendung kann direkt mit dem Python der Projektumgebung gestartet werden:
+Eine Aktivierung der `.venv` ist nicht notwendig. Die Anwendung kann immer direkt gestartet werden:
 
 ```powershell
 & ".\.venv\Scripts\python.exe" -m qt_route_selector

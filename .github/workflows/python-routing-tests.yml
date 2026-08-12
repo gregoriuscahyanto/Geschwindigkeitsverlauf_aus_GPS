@@ -68,4 +68,4 @@ jobs:
 
       - name: Verify local environment
         shell: powershell
-        run: .\.venv\Scripts\python.exe -c "import PySide6, pyqtgraph, numpy, pandas, geopandas, rasterio; print('Offline Windows environment OK')"
+        run: .\.venv\Scripts\python.exe -c "import PySide6, pyqtgraph, numpy, scipy, pandas, geopandas, rasterio; print('Offline Windows environment OK')"
