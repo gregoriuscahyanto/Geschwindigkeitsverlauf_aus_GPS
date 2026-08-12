@@ -1,12 +1,12 @@
 @echo off
 setlocal
 
-set "PY=%~dp0.venv\Scripts\python.exe"
-if exist "%PY%" goto run
-
 if defined LOCALAPPDATA (
     set "PY=%LOCALAPPDATA%\GPSRP\venv\Scripts\python.exe"
 )
+if exist "%PY%" goto run
+
+set "PY=%~dp0.venv\Scripts\python.exe"
 if exist "%PY%" goto run
 
 echo Keine eingerichtete Python-Umgebung gefunden.
