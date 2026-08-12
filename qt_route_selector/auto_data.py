@@ -248,6 +248,13 @@ def prepare_dataset(
     elevation_directory.mkdir(parents=True, exist_ok=True)
 
     _emit(progress, f"Bereite {dataset['label']} vor …", 0)
+
+    # A local PBF may intentionally be an older snapshot of a Geofabrik
+    # "*-latest" extract, especially on an enterprise/offline laptop. Comparing
+    # such a snapshot with today's online *.md5 would falsely classify it as
+    # corrupt and, worse, delete a valid local file. Only verify a PBF when this
+    # preparation run actually had to download it.
+    pbf_was_present = pbf_path.is_file() and pbf_path.stat().st_size > 0
     pbf_path = _download(
         str(dataset["osm_url"]),
         pbf_path,
@@ -255,7 +262,16 @@ def prepare_dataset(
         start_percent=1,
         end_percent=52,
     )
-    _verify_geofabrik_md5(pbf_path, str(dataset["osm_md5_url"]), progress)
+    if not pbf_was_present:
+        md5_url = str(dataset.get("osm_md5_url", "") or "").strip()
+        if md5_url:
+            _verify_geofabrik_md5(pbf_path, md5_url, progress)
+    else:
+        _emit(
+            progress,
+            f"Lokale PBF wird unverändert verwendet: {pbf_path.name}",
+            57,
+        )
 
     try:
         _download(
