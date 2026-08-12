@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 # Bump when the set of cached road classes/columns changes. The version is part
 # of the filename so an older GPKG cannot silently be reused after an upgrade.
-ROUTING_CACHE_FORMAT_VERSION = 2
+ROUTING_CACHE_FORMAT_VERSION = 3
 
 ALLOWED_CAR_HIGHWAYS = {
     "motorway",
@@ -46,6 +46,13 @@ _CACHE_COLUMNS = (
     "vehicle",
     "motor_vehicle",
     "lanes",
+    # A DEM describes the terrain surface, not the driven elevation inside a
+    # tunnel or on a bridge. Keep these OSM structure tags so the simulation
+    # can correct the sampled terrain profile at such road sections.
+    "tunnel",
+    "bridge",
+    "layer",
+    "covered",
 )
 
 
