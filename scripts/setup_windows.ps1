@@ -17,6 +17,19 @@ $RuntimeRoot = if ($env:GPS_ROUTENPLANER_HOME) {
     Join-Path $HOME "AppData\Local\GPS-Routenplaner"
 }
 
+function Assert-Python311X64 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Executable,
+        [string]$Context = "Python"
+    )
+
+    & $Executable -c "import struct,sys; assert sys.version_info[:2] == (3,11), sys.version; assert struct.calcsize('P') * 8 == 64, '32-bit Python'; print('Python', sys.version.split()[0], '64 Bit')"
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Context muss Python 3.11 64 Bit verwenden. Falls bereits eine falsche .venv existiert: .venv löschen und das Setup mit installiertem Python 3.11 x64 erneut starten."
+    }
+}
+
 if (-not (Test-Path $Requirements)) {
     throw "requirements.txt wurde nicht gefunden: $Requirements"
 }
@@ -30,8 +43,13 @@ New-Item -ItemType Directory -Force -Path (Join-Path $RuntimeRoot "exports") | O
 if (-not (Test-Path $PythonExe)) {
     Write-Host "Erstelle lokale VS-Code-Umgebung: $VenvRoot"
     if (Get-Command py -ErrorAction SilentlyContinue) {
+        & py -3.11 -c "import struct,sys; assert sys.version_info[:2] == (3,11), sys.version; assert struct.calcsize('P') * 8 == 64, '32-bit Python'"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Der Python Launcher findet kein Python 3.11 64 Bit. Bitte Python 3.11 x64 installieren bzw. durch die IT bereitstellen lassen."
+        }
         & py -3.11 -m venv $VenvRoot
     } elseif (Get-Command python -ErrorAction SilentlyContinue) {
+        Assert-Python311X64 -Executable "python" -Context "Das verfügbare python"
         & python -m venv $VenvRoot
     } else {
         throw "Python 3.11 wurde nicht gefunden. Bitte Python 3.11 installieren bzw. durch die IT bereitstellen lassen."
@@ -40,6 +58,10 @@ if (-not (Test-Path $PythonExe)) {
         throw "Die virtuelle Umgebung konnte nicht erstellt werden."
     }
 }
+
+# Existing environments must match the wheelhouse target as well. Otherwise pip
+# reports misleading 'from versions: none' errors for valid CPython 3.11 wheels.
+Assert-Python311X64 -Executable $PythonExe -Context "Die lokale .venv"
 
 # A normal Python venv already contains pip. If a restricted Python build did
 # not create it, try the standard-library bootstrap without contacting PyPI.
