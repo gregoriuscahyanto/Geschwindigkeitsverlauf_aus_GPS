@@ -87,13 +87,40 @@ def _dynamic_dataset_label(poly_path: Path, base_name: str) -> str:
     return candidate.replace("_", " ").replace("-", " ").strip().title()
 
 
-def discover_local_datasets(data_root: str | Path) -> tuple[str, ...]:
-    """Register local Geofabrik-style POLY/PBF pairs as routing datasets.
+def _local_pbf_for_poly(osm_directory: Path, poly_path: Path) -> Path | None:
+    """Return the preferred local PBF belonging to one ``<name>.poly`` file.
 
-    A pair is detected from ``<name>.poly`` plus ``<name>-latest.osm.pbf``.
-    Known datasets reuse their existing catalog definition. Unknown pairs get a
-    local-only definition and therefore work without adding code for every new
-    country/state/region first.
+    Standard Geofabrik ``<name>-latest.osm.pbf`` is preferred. Dated or otherwise
+    versioned files such as ``california-260811.osm.pbf`` are accepted as well.
+    If several versioned files are present, the newest local file is selected.
+    """
+
+    base_name = poly_path.stem
+    latest_path = osm_directory / f"{base_name}-latest.osm.pbf"
+    if latest_path.is_file() and latest_path.stat().st_size > 0:
+        return latest_path
+
+    candidates = [
+        path
+        for path in osm_directory.glob(f"{base_name}-*.osm.pbf")
+        if path.is_file() and path.stat().st_size > 0
+    ]
+    plain_path = osm_directory / f"{base_name}.osm.pbf"
+    if plain_path.is_file() and plain_path.stat().st_size > 0:
+        candidates.append(plain_path)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name.lower()))
+
+
+def discover_local_datasets(data_root: str | Path) -> tuple[str, ...]:
+    """Register local POLY/PBF pairs as routing datasets.
+
+    A pair is detected from ``<name>.poly`` plus either the normal Geofabrik
+    ``<name>-latest.osm.pbf`` or a dated/versioned variant such as
+    ``<name>-260811.osm.pbf``. The logical dataset name always comes from the
+    POLY basename, so ``california-260811.osm.pbf`` + ``california.poly`` is
+    registered as ``california``.
     """
 
     root = Path(data_root).expanduser().resolve()
@@ -118,24 +145,23 @@ def discover_local_datasets(data_root: str | Path) -> tuple[str, ...]:
             DATASET_ORDER.remove(dataset_key)
 
     filename_to_key: dict[tuple[str, str], str] = {}
+    dynamic_by_poly: dict[str, str] = {}
     for dataset_key, definition in DATASETS.items():
+        poly_filename = str(definition.get("poly_filename", ""))
         filename_to_key[
             (
                 str(definition.get("osm_filename", "")).lower(),
-                str(definition.get("poly_filename", "")).lower(),
+                poly_filename.lower(),
             )
         ] = dataset_key
+        if dataset_key in _DYNAMIC_DATASET_KEYS and poly_filename:
+            dynamic_by_poly[poly_filename.lower()] = dataset_key
 
-    discovered: list[str] = []
-    suffix = "-latest.osm.pbf"
-    for pbf_path in sorted(osm_directory.glob(f"*{suffix}")):
-        if not pbf_path.is_file() or pbf_path.stat().st_size <= 0:
-            continue
-        base_name = pbf_path.name[: -len(suffix)]
-        if not base_name:
-            continue
-        poly_path = osm_directory / f"{base_name}.poly"
+    for poly_path in sorted(osm_directory.glob("*.poly")):
         if not poly_path.is_file() or poly_path.stat().st_size <= 0:
+            continue
+        pbf_path = _local_pbf_for_poly(osm_directory, poly_path)
+        if pbf_path is None:
             continue
 
         existing_key = filename_to_key.get(
@@ -146,6 +172,16 @@ def discover_local_datasets(data_root: str | Path) -> tuple[str, ...]:
                 DATASET_ORDER.append(existing_key)
             continue
 
+        # If this POLY was already registered dynamically and a newer dated PBF
+        # appeared, keep the stable logical key and simply point it to the newer
+        # local PBF instead of creating a duplicate dataset entry.
+        dynamic_key = dynamic_by_poly.get(poly_path.name.lower())
+        if dynamic_key and dynamic_key in DATASETS:
+            DATASETS[dynamic_key]["osm_filename"] = pbf_path.name
+            filename_to_key[(pbf_path.name.lower(), poly_path.name.lower())] = dynamic_key
+            continue
+
+        base_name = poly_path.stem
         dataset_key = _dynamic_dataset_key(base_name)
         if dataset_key in DATASETS:
             original_key = dataset_key
@@ -166,8 +202,8 @@ def discover_local_datasets(data_root: str | Path) -> tuple[str, ...]:
         }
         _DYNAMIC_DATASET_KEYS.add(dataset_key)
         DATASET_ORDER.append(dataset_key)
+        dynamic_by_poly[poly_path.name.lower()] = dataset_key
         filename_to_key[(pbf_path.name.lower(), poly_path.name.lower())] = dataset_key
-        discovered.append(dataset_key)
 
     return tuple(
         key
@@ -283,20 +319,19 @@ def _match_cached_boundaries(
     dynamic_keys = discover_local_datasets(data_root)
     missing: list[str] = []
 
+    # Locally added extracts are checked first. This also lets a dated local PBF
+    # for a built-in region win over a broad fallback whose POLY happens to exist.
+    for dataset_key in dynamic_keys:
+        result = points_within_dataset(dataset_key, data_root, selected)
+        if result is True:
+            return dataset_key, missing
+
     for dataset_key in REGIONAL_DATASET_KEYS:
         result = points_within_dataset(dataset_key, data_root, selected)
         if result is True:
             return dataset_key, missing
         if result is None:
             missing.append(dataset_key)
-
-    # Local ad-hoc extracts are intentionally checked before broad built-in
-    # country polygons. Example: berlin.poly + berlin-latest.osm.pbf should win
-    # over germany.poly and avoid requiring the Germany-wide PBF.
-    for dataset_key in dynamic_keys:
-        result = points_within_dataset(dataset_key, data_root, selected)
-        if result is True:
-            return dataset_key, missing
 
     for dataset_key in COUNTRY_DATASET_KEYS:
         result = points_within_dataset(dataset_key, data_root, selected)
@@ -345,14 +380,14 @@ def detect_dataset_for_points(
         raise ValueError(
             "Gebiet konnte offline nicht sicher automatisch bestimmt werden. "
             f"Folgende eingebaute Gebietsgrenzen (.poly) fehlen lokal: {missing_labels}. "
-            "Alternativ kann ein eigenes Geofabrik-Paar <gebiet>.poly + "
-            "<gebiet>-latest.osm.pbf in data\\osm kopiert werden. "
+            "Alternativ kann ein eigenes Paar <gebiet>.poly + "
+            "<gebiet>-*.osm.pbf in data\\osm kopiert werden. "
             f"Punkte: {'; '.join(coordinates)}"
         )
 
     raise ValueError(
         "Keines der lokal verfügbaren Gebiete enthält alle gewählten Punkte. "
-        "Lege für ein weiteres Gebiet die passende .poly- und -latest.osm.pbf-Datei "
+        "Lege für ein weiteres Gebiet die passende .poly- und .osm.pbf-Datei "
         "gemeinsam in data\\osm ab. "
         f"Punkte: {'; '.join(coordinates)}"
     )
