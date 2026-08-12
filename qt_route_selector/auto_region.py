@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 import urllib.request
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -18,9 +19,7 @@ register_extra_datasets(DATASETS)
 
 
 # Prefer the smallest useful extract first. Country polygons are checked only
-# after the supported German regional extracts. DACH is the final fallback and
-# therefore now means that the selected points really span more than one DACH
-# country instead of merely lying outside BW/Bayern/Hessen.
+# after the supported German regional extracts and locally discovered extracts.
 REGIONAL_DATASET_KEYS = (
     "baden_wuerttemberg",
     "bayern",
@@ -34,7 +33,7 @@ COUNTRY_DATASET_KEYS = (
     "switzerland",
 )
 
-DATASET_ORDER = (
+STATIC_DATASET_ORDER = (
     "germany",
     "austria",
     "switzerland",
@@ -44,6 +43,11 @@ DATASET_ORDER = (
     "rheinland_pfalz",
     "dach",
 )
+
+# Kept mutable so consumers that import DATASET_ORDER once also see datasets
+# discovered later while the application is already running.
+DATASET_ORDER = list(STATIC_DATASET_ORDER)
+_DYNAMIC_DATASET_KEYS: set[str] = set()
 
 DISPLAY_LABELS = {
     "austria": "Österreich (gesamt)",
@@ -61,6 +65,114 @@ def dataset_label(dataset_key: str) -> str:
     return DISPLAY_LABELS.get(
         dataset_key,
         str(DATASETS.get(dataset_key, {}).get("label", dataset_key)),
+    )
+
+
+def _dynamic_dataset_key(base_name: str) -> str:
+    key = re.sub(r"[^a-z0-9]+", "_", base_name.lower()).strip("_")
+    return key or "local_dataset"
+
+
+def _dynamic_dataset_label(poly_path: Path, base_name: str) -> str:
+    try:
+        first_line = poly_path.read_text(
+            encoding="utf-8", errors="ignore"
+        ).splitlines()[0].strip()
+    except (OSError, IndexError):
+        first_line = ""
+
+    candidate = first_line if first_line and len(first_line) <= 80 else base_name
+    if candidate.lower() in {"polygon", "poly"}:
+        candidate = base_name
+    return candidate.replace("_", " ").replace("-", " ").strip().title()
+
+
+def discover_local_datasets(data_root: str | Path) -> tuple[str, ...]:
+    """Register local Geofabrik-style POLY/PBF pairs as routing datasets.
+
+    A pair is detected from ``<name>.poly`` plus ``<name>-latest.osm.pbf``.
+    Known datasets reuse their existing catalog definition. Unknown pairs get a
+    local-only definition and therefore work without adding code for every new
+    country/state/region first.
+    """
+
+    root = Path(data_root).expanduser().resolve()
+    osm_directory = root / "osm"
+    osm_directory.mkdir(parents=True, exist_ok=True)
+
+    # Remove dynamically registered datasets whose local pair has been deleted.
+    for dataset_key in tuple(_DYNAMIC_DATASET_KEYS):
+        dataset = DATASETS.get(dataset_key, {})
+        pbf_path = osm_directory / str(dataset.get("osm_filename", ""))
+        poly_path = osm_directory / str(dataset.get("poly_filename", ""))
+        if (
+            pbf_path.is_file()
+            and pbf_path.stat().st_size > 0
+            and poly_path.is_file()
+            and poly_path.stat().st_size > 0
+        ):
+            continue
+        _DYNAMIC_DATASET_KEYS.discard(dataset_key)
+        DATASETS.pop(dataset_key, None)
+        while dataset_key in DATASET_ORDER:
+            DATASET_ORDER.remove(dataset_key)
+
+    filename_to_key: dict[tuple[str, str], str] = {}
+    for dataset_key, definition in DATASETS.items():
+        filename_to_key[
+            (
+                str(definition.get("osm_filename", "")).lower(),
+                str(definition.get("poly_filename", "")).lower(),
+            )
+        ] = dataset_key
+
+    discovered: list[str] = []
+    suffix = "-latest.osm.pbf"
+    for pbf_path in sorted(osm_directory.glob(f"*{suffix}")):
+        if not pbf_path.is_file() or pbf_path.stat().st_size <= 0:
+            continue
+        base_name = pbf_path.name[: -len(suffix)]
+        if not base_name:
+            continue
+        poly_path = osm_directory / f"{base_name}.poly"
+        if not poly_path.is_file() or poly_path.stat().st_size <= 0:
+            continue
+
+        existing_key = filename_to_key.get(
+            (pbf_path.name.lower(), poly_path.name.lower())
+        )
+        if existing_key:
+            if existing_key not in DATASET_ORDER:
+                DATASET_ORDER.append(existing_key)
+            continue
+
+        dataset_key = _dynamic_dataset_key(base_name)
+        if dataset_key in DATASETS:
+            original_key = dataset_key
+            counter = 2
+            while dataset_key in DATASETS:
+                dataset_key = f"local_{original_key}_{counter}"
+                counter += 1
+
+        DATASETS[dataset_key] = {
+            "label": _dynamic_dataset_label(poly_path, base_name),
+            "osm_url": "",
+            "osm_md5_url": "",
+            "osm_filename": pbf_path.name,
+            "poly_url": "",
+            "poly_filename": poly_path.name,
+            "elevation_provider": "copernicus_glo30",
+            "local_discovered": True,
+        }
+        _DYNAMIC_DATASET_KEYS.add(dataset_key)
+        DATASET_ORDER.append(dataset_key)
+        filename_to_key[(pbf_path.name.lower(), poly_path.name.lower())] = dataset_key
+        discovered.append(dataset_key)
+
+    return tuple(
+        key
+        for key in DATASET_ORDER
+        if key in _DYNAMIC_DATASET_KEYS
     )
 
 
@@ -108,12 +220,7 @@ def ensure_region_boundaries(
     data_root: str | Path,
     progress: Any | None = None,
 ) -> None:
-    """Best-effort boundary preparation that remains usable behind a firewall.
-
-    Existing local .poly files are always kept. Once a missing boundary proves
-    that network access is unavailable, the remaining missing boundaries are
-    skipped instead of aborting the complete automatic region detection.
-    """
+    """Best-effort boundary preparation for the built-in DACH catalog."""
 
     keys = REGIONAL_DATASET_KEYS + COUNTRY_DATASET_KEYS + ("dach",)
     total = len(keys)
@@ -148,9 +255,6 @@ def ensure_region_boundaries(
         try:
             _download_boundary(dataset_key, root)
         except Exception:
-            # A managed/offline PC commonly blocks all boundary downloads. Do
-            # not wait for every URL and do not invalidate boundaries that are
-            # already available locally.
             network_unavailable = True
             if progress is not None:
                 progress(
@@ -176,6 +280,7 @@ def _match_cached_boundaries(
 ) -> tuple[str, list[str]]:
     """Return a safe match from currently available local polygons only."""
 
+    dynamic_keys = discover_local_datasets(data_root)
     missing: list[str] = []
 
     for dataset_key in REGIONAL_DATASET_KEYS:
@@ -184,6 +289,14 @@ def _match_cached_boundaries(
             return dataset_key, missing
         if result is None:
             missing.append(dataset_key)
+
+    # Local ad-hoc extracts are intentionally checked before broad built-in
+    # country polygons. Example: berlin.poly + berlin-latest.osm.pbf should win
+    # over germany.poly and avoid requiring the Germany-wide PBF.
+    for dataset_key in dynamic_keys:
+        result = points_within_dataset(dataset_key, data_root, selected)
+        if result is True:
+            return dataset_key, missing
 
     for dataset_key in COUNTRY_DATASET_KEYS:
         result = points_within_dataset(dataset_key, data_root, selected)
@@ -196,8 +309,6 @@ def _match_cached_boundaries(
     if dach_result is None:
         missing.append("dach")
     elif dach_result is True:
-        # Only call a route cross-border when all country boundaries were
-        # actually available and have already rejected a single-country match.
         missing_countries = set(missing).intersection(COUNTRY_DATASET_KEYS)
         if not missing_countries:
             return "dach", missing
@@ -214,15 +325,10 @@ def detect_dataset_for_points(
     if len(selected) < 2:
         raise ValueError("Für die automatische Gebietserkennung werden mindestens zwei Punkte benötigt.")
 
-    # First use what is already local. This is the critical enterprise/offline
-    # path: a copied Rheinland-Pfalz polygon must work without first contacting
-    # unrelated BW/Bayern/Switzerland boundary URLs.
     dataset_key, missing = _match_cached_boundaries(selected, data_root)
     if dataset_key:
         return dataset_key
 
-    # On an online development machine, fill missing boundaries. On a managed
-    # offline machine this is best-effort and never destroys the local result.
     if missing:
         ensure_region_boundaries(data_root, progress=progress)
         dataset_key, missing = _match_cached_boundaries(selected, data_root)
@@ -238,15 +344,16 @@ def detect_dataset_for_points(
         missing_labels = ", ".join(dataset_label(key) for key in missing)
         raise ValueError(
             "Gebiet konnte offline nicht sicher automatisch bestimmt werden. "
-            f"Folgende Gebietsgrenzen (.poly) fehlen lokal: {missing_labels}. "
-            "Kopiere auf den Enterprise-PC den kompletten Ordner "
-            "%LOCALAPPDATA%\\GPS-Routenplaner\\data\\osm inklusive der .poly-Dateien. "
+            f"Folgende eingebaute Gebietsgrenzen (.poly) fehlen lokal: {missing_labels}. "
+            "Alternativ kann ein eigenes Geofabrik-Paar <gebiet>.poly + "
+            "<gebiet>-latest.osm.pbf in data\\osm kopiert werden. "
             f"Punkte: {'; '.join(coordinates)}"
         )
 
     raise ValueError(
-        "Mindestens ein Punkt liegt außerhalb der derzeit automatisch unterstützten "
-        "Gebiete (Deutschland, Österreich, Schweiz bzw. DACH). "
+        "Keines der lokal verfügbaren Gebiete enthält alle gewählten Punkte. "
+        "Lege für ein weiteres Gebiet die passende .poly- und -latest.osm.pbf-Datei "
+        "gemeinsam in data\\osm ab. "
         f"Punkte: {'; '.join(coordinates)}"
     )
 
@@ -255,6 +362,7 @@ def dataset_storage_state(
     dataset_key: str,
     data_root: str | Path,
 ) -> dict[str, object]:
+    discover_local_datasets(data_root)
     dataset = DATASETS[dataset_key]
     root = Path(data_root).expanduser().resolve()
     osm_directory = root / "osm"
@@ -363,18 +471,16 @@ def coverage_snapshot(
     *,
     active_dataset_key: str = "",
 ) -> list[dict[str, object]]:
-    """Return local-only polygon payloads for the data-coverage map.
-
-    No downloads are started here. A region is drawable only when its .poly file
-    is already present locally. Broad DACH/Germany polygons are emitted first so
-    the smaller regional polygons remain visible above them.
-    """
+    """Return local-only polygon payloads for the data-coverage map."""
 
     root = Path(data_root).expanduser().resolve()
+    discover_local_datasets(root)
     render_order = ("dach",) + tuple(key for key in DATASET_ORDER if key != "dach")
     payload: list[dict[str, object]] = []
 
     for dataset_key in render_order:
+        if dataset_key not in DATASETS:
+            continue
         state = dataset_storage_state(dataset_key, root)
         if not bool(state["poly_ready"]):
             continue
