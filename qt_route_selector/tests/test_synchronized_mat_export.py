@@ -5,15 +5,16 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from openpyxl import load_workbook
 from scipy.io import loadmat
 
+from qt_route_selector.synchronized_excel_export import export_excel_simulation
 from qt_route_selector.synchronized_mat_export import export_matlab_simulation
 
 
 class SynchronizedMatExportTests(unittest.TestCase):
-    def test_all_simulation_inputs_share_time_length(self) -> None:
-        # Deliberately use different spatial/time lengths. The exported
-        # simulation inputs must all follow the 5-sample time axis.
+    @staticmethod
+    def _fixture() -> tuple[dict, np.ndarray, dict]:
         result = {
             "distance": {
                 "distance_m": np.asarray([0.0, 30.0, 70.0, 100.0]),
@@ -36,8 +37,8 @@ class SynchronizedMatExportTests(unittest.TestCase):
                 "target_kmh": np.asarray([0.0, 30.0, 35.0, 30.0, 0.0]),
                 "acceleration_mps2": np.asarray([0.0, 1.2, 0.3, -0.8, -1.5]),
             },
-            "events": {},
-            "summary": {},
+            "events": {"traffic_lights": [{"distance_m": 44.0, "dwell_s": 20.0}]},
+            "summary": {"distance_km": 0.1, "duration_min": 0.1333},
         }
         elevation = np.asarray([400.0, 405.0, 410.0, 408.0])
         power = {
@@ -54,6 +55,10 @@ class SynchronizedMatExportTests(unittest.TestCase):
             "cumulative_recuperation_energy_kwh": np.zeros(5),
             "cumulative_net_energy_kwh": np.zeros(5),
         }
+        return result, elevation, power
+
+    def test_all_simulation_inputs_share_time_length(self) -> None:
+        result, elevation, power = self._fixture()
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             path = export_matlab_simulation(
@@ -94,6 +99,52 @@ class SynchronizedMatExportTests(unittest.TestCase):
         np.testing.assert_allclose(np.asarray(sim_input["v_kmh"]).ravel(), [0, 25, 31, 27, 0])
         self.assertEqual(np.asarray(sim_input["curve_radius_m"]).size, 5)
         self.assertEqual(np.asarray(sim_input["post_curve_boost_kmh"]).size, 5)
+
+    def test_excel_simulation_sheet_uses_same_five_sample_grid(self) -> None:
+        result, elevation, power = self._fixture()
+        route = {
+            "segments": [
+                {"from_index": 0, "to_index": 1, "distance_m": 100.0, "maxspeed_kmh": 50.0}
+            ]
+        }
+        parameters = {"driver_profile": "normalo", "driver_hard_max_kmh": 140.0}
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = export_excel_simulation(
+                result,
+                Path(temporary_directory) / "sync.xlsx",
+                route=route,
+                parameters=parameters,
+                power_data=power,
+                elevation_m=elevation,
+            )
+            workbook = load_workbook(path, read_only=True, data_only=True)
+            sheet = workbook["Simulation"]
+            headers = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
+            rows = list(sheet.iter_rows(min_row=2, values_only=True))
+
+            self.assertEqual(len(rows), 5)
+            required = {
+                "time_s",
+                "distance_m",
+                "v_kmh",
+                "curve_radius_m",
+                "elevation_m",
+                "grade_pct",
+                "p_total_kw",
+            }
+            self.assertTrue(required.issubset(set(headers)), required - set(headers))
+            self.assertIn("Summary", workbook.sheetnames)
+            self.assertIn("Parameters", workbook.sheetnames)
+            self.assertIn("Drivers", workbook.sheetnames)
+            self.assertIn("Traffic_Lights", workbook.sheetnames)
+            self.assertIn("Segments", workbook.sheetnames)
+
+            time_column = headers.index("time_s")
+            speed_column = headers.index("v_kmh")
+            self.assertEqual([row[time_column] for row in rows], [0, 2, 4, 6, 8])
+            self.assertEqual([row[speed_column] for row in rows], [0, 25, 31, 27, 0])
+            workbook.close()
 
 
 if __name__ == "__main__":
