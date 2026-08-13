@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import numpy as np
 
@@ -22,7 +22,7 @@ POLICY_LABELS = {
     POLICY_GERMANY_POINTS: "Deutschland: max. Punkte",
 }
 
-# Conservative passenger-car envelope for Germany.  It deliberately uses the
+# Conservative passenger-car envelope for Germany. It deliberately uses the
 # stricter common bound when inner/outer locality is not known from the route:
 # <=20 km/h over -> no point, <=30 -> at most one point, above -> up to two.
 _GERMANY_PASSENGER_CAR_MAX_OVER_KMH = {
@@ -30,6 +30,11 @@ _GERMANY_PASSENGER_CAR_MAX_OVER_KMH = {
     1: 30.0,
     2: math.inf,
 }
+
+Simulator = Callable[
+    [Mapping[str, Any] | _simulation.PreparedRoute, Mapping[str, Any] | None],
+    dict[str, Any],
+]
 
 
 def normalize_policy(value: Any) -> str:
@@ -48,7 +53,11 @@ def germany_max_overspeed_kmh(max_points: Any) -> float:
 
 def conservative_germany_points(overspeed_kmh: np.ndarray | float) -> np.ndarray:
     over = np.maximum(0.0, np.asarray(overspeed_kmh, dtype=float))
-    return np.where(over <= 20.0 + 1e-9, 0.0, np.where(over <= 30.0 + 1e-9, 1.0, 2.0))
+    return np.where(
+        over <= 20.0 + 1e-9,
+        0.0,
+        np.where(over <= 30.0 + 1e-9, 1.0, 2.0),
+    )
 
 
 def _effective_limit_value(
@@ -64,9 +73,9 @@ def _effective_limit_value(
         allowance = germany_max_overspeed_kmh(parameters.get("max_speeding_points", 0))
         if math.isinf(allowance):
             return hard_max
-        # The base model uses speed_tolerance_kmh both as a driver-noise band
-        # and as a final hard-cap allowance. Reserve that band inside the
-        # selected legal envelope so random noise cannot cross the point limit.
+        # The established model uses speed_tolerance_kmh both as a driver-noise
+        # band and as a final hard-cap allowance. Reserve that band inside the
+        # selected point envelope so noise cannot cross the configured limit.
         tolerance = max(0.0, float(parameters.get("speed_tolerance_kmh", 0.0)))
         nominal_allowance = max(0.0, allowance - tolerance)
         return min(hard_max, legal + nominal_allowance)
@@ -129,17 +138,12 @@ def _nearest_spatial_values(
     return source_values[positions]
 
 
-def simulate_speed_profile(
+def simulate_with_policy(
+    simulator: Simulator,
     route: Mapping[str, Any] | _simulation.PreparedRoute,
     parameters: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run the existing model with a configurable road-speed-limit policy.
-
-    The original OSM road limit is preserved in ``distance.road_limit_kmh``.
-    ``distance.speed_policy_limit_kmh`` contains the effective limit used by the
-    driver model.  Overspeed and conservative German point estimates are
-    supplied on both the spatial and time axes.
-    """
+    """Apply the policy around any compatible established speed simulator."""
 
     params = _simulation.merged_parameters(parameters)
     policy = normalize_policy(params.get("speed_limit_policy", POLICY_OBEY))
@@ -160,7 +164,7 @@ def simulate_speed_profile(
         legal_prepared = _simulation.prepare_route(route, sample_distance)
         adjusted_route = _policy_route(route, params, policy)
 
-    result = _simulation.simulate_speed_profile(adjusted_route, params)
+    result = simulator(adjusted_route, params)
     distance = result.get("distance", {})
     time = result.get("time", {})
     summary = result.get("summary", {})
@@ -199,6 +203,42 @@ def simulate_speed_profile(
     return result
 
 
+def simulate_speed_profile(
+    route: Mapping[str, Any] | _simulation.PreparedRoute,
+    parameters: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run the base simulator with the configured speed-limit policy."""
+
+    return simulate_with_policy(_simulation.simulate_speed_profile, route, parameters)
+
+
+def install_integrated_speed_profile_policy() -> None:
+    """Wrap the enhanced simulator used by the integrated GUI exactly once."""
+
+    try:
+        from ._internal.simulation_layers import integrated_speed_profile_v4 as layer
+    except ImportError:
+        try:
+            from _internal.simulation_layers import integrated_speed_profile_v4 as layer
+        except ImportError:
+            return
+
+    if bool(getattr(layer, "_speed_limit_policy_installed", False)):
+        return
+    original = getattr(layer, "_enhanced_simulate", None)
+    if not callable(original):
+        return
+
+    def wrapped(
+        route: Mapping[str, Any] | _simulation.PreparedRoute,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return simulate_with_policy(original, route, parameters)
+
+    layer._enhanced_simulate = wrapped
+    layer._speed_limit_policy_installed = True
+
+
 __all__ = [
     "POLICY_GERMANY_POINTS",
     "POLICY_IGNORE",
@@ -206,6 +246,8 @@ __all__ = [
     "POLICY_OBEY",
     "conservative_germany_points",
     "germany_max_overspeed_kmh",
+    "install_integrated_speed_profile_policy",
     "normalize_policy",
     "simulate_speed_profile",
+    "simulate_with_policy",
 ]
