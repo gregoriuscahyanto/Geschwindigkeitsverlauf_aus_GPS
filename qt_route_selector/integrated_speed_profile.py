@@ -60,7 +60,7 @@ install_integrated_speed_profile_policy()
 
 
 class _MatExportWorker(QObject):
-    """Run MAT serialization without blocking the Qt GUI."""
+    """Run file serialization without blocking the Qt GUI."""
 
     succeeded = Signal(str)
     failed = Signal(str)
@@ -98,6 +98,7 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
         self._mat_export_thread: QThread | None = None
         self._mat_export_worker: _MatExportWorker | None = None
         self._mat_export_button: QPushButton | None = None
+        self._active_export_kind = "MAT"
         self._install_speed_limit_policy_controls()
         self._merge_summary_cards()
         self._configure_mat_export_ui()
@@ -302,14 +303,14 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
         self.overview_card = card
 
     def _configure_mat_export_ui(self) -> None:
-        """Describe the direct Python MAT export in the normal export action."""
+        """Offer the synchronized simulation export as MAT or Excel."""
         for button in self.findChildren(QPushButton):
             if "exportieren" in button.text().lower():
-                button.setText("MAT exportieren")
+                button.setText("Exportieren (MAT / Excel)")
                 button.setToolTip(
-                    "MATLAB-.mat mit synchronisierten Simulationseingängen erzeugen. "
-                    "Alle input_*-Signale und alle Felder in sim_input besitzen exakt "
-                    "dieselbe N×1-Länge wie time_s."
+                    "Simulation wahlweise als MATLAB-.mat oder Excel-.xlsx exportieren. "
+                    "Beide Formate verwenden denselben synchronisierten Zeitvektor; "
+                    "Geschwindigkeit, Kurvenradius, Höhe, Leistung usw. haben dieselbe Länge."
                 )
                 self._mat_export_button = button
 
@@ -330,10 +331,27 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
                 ) from package_error
         return export_matlab_simulation
 
+    @staticmethod
+    def _excel_exporter():
+        """Load OpenPyXL only when the user actually exports to Excel."""
+        try:
+            from .synchronized_excel_export import export_excel_simulation
+        except ImportError as package_error:
+            try:
+                from synchronized_excel_export import export_excel_simulation
+            except ImportError:
+                raise RuntimeError(
+                    "Für den Excel-Export fehlt OpenPyXL in der aktuellen .venv.\n\n"
+                    "Bitte im Projektordner einmal ausführen:\n"
+                    ".\\scripts\\setup_windows.ps1\n\n"
+                    "Danach die Anwendung neu starten."
+                ) from package_error
+        return export_excel_simulation
+
     def export_result(self) -> None:
-        """Start an asynchronous MAT export containing individual double arrays."""
+        """Start an asynchronous synchronized MAT or Excel export."""
         if self._mat_export_thread is not None and self._mat_export_thread.isRunning():
-            self.statusBar().showMessage("MAT-Export läuft bereits …")
+            self.statusBar().showMessage("Export läuft bereits …")
             return
 
         if self._result is None:
@@ -344,21 +362,26 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
             )
             return
 
-        selected, _ = QFileDialog.getSaveFileName(
+        selected, selected_filter = QFileDialog.getSaveFileName(
             self,
-            "Vollständige Simulation als MAT-Datei exportieren",
+            "Vollständige Simulation exportieren",
             str(exports_dir() / "speed_profile_result.mat"),
-            "MATLAB-Datei (*.mat)",
+            "MATLAB-Datei (*.mat);;Excel-Arbeitsmappe (*.xlsx)",
         )
         if not selected:
             return
 
         path = Path(selected).expanduser().resolve()
-        if path.suffix.lower() != ".mat":
-            path = path.with_suffix(".mat")
+        if path.suffix.lower() not in {".mat", ".xlsx"}:
+            path = path.with_suffix(".xlsx" if "Excel" in selected_filter else ".mat")
 
         try:
-            export_matlab_simulation = self._mat_exporter()
+            if path.suffix.lower() == ".xlsx":
+                exporter = self._excel_exporter()
+                self._active_export_kind = "Excel"
+            else:
+                exporter = self._mat_exporter()
+                self._active_export_kind = "MAT"
 
             # Snapshot everything before entering the worker thread. The worker
             # does not access QWidget state or mutable simulation state.
@@ -385,7 +408,7 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
             return
 
         def job() -> Path:
-            return export_matlab_simulation(
+            return exporter(
                 result_snapshot,
                 path,
                 route=route_snapshot,
@@ -411,34 +434,43 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
         self._mat_export_worker = worker
         if self._mat_export_button is not None:
             self._mat_export_button.setEnabled(False)
-            self._mat_export_button.setText("MAT-Export läuft …")
+            self._mat_export_button.setText(f"{self._active_export_kind}-Export läuft …")
         self.statusBar().showMessage(
-            "MAT-Export läuft im Hintergrund … Die Anwendung bleibt bedienbar."
+            f"{self._active_export_kind}-Export läuft im Hintergrund … Die Anwendung bleibt bedienbar."
         )
         thread.start()
 
     @Slot(str)
-    def _on_mat_export_succeeded(self, mat_path: str) -> None:
-        self.statusBar().showMessage(f"MAT-Export gespeichert: {mat_path}", 10000)
+    def _on_mat_export_succeeded(self, exported_path: str) -> None:
+        kind = "Excel" if Path(exported_path).suffix.lower() == ".xlsx" else "MAT"
+        self.statusBar().showMessage(f"{kind}-Export gespeichert: {exported_path}", 10000)
+        if kind == "Excel":
+            detail = (
+                "Im Tabellenblatt 'Simulation' steht pro Zeitschritt genau eine Zeile. "
+                "Alle dortigen Signale besitzen dieselbe Länge, z. B. time_s, v_kmh, "
+                "curve_radius_m, elevation_m und p_total_kw."
+            )
+        else:
+            detail = (
+                "Für die Folgesimulation verwende sim_input oder die input_*-Variablen. "
+                "Alle diese Signale sind N×1 und besitzen exakt dieselbe Länge wie input_time_s."
+            )
         QMessageBox.information(
             self,
-            "MAT-Export fertig",
-            f"Gespeichert:\n{mat_path}\n\n"
-            "Für die Folgesimulation verwende sim_input oder die input_*-Variablen. "
-            "Alle diese Signale sind N×1 und besitzen exakt dieselbe Länge wie input_time_s, "
-            "z. B. input_v_kmh, input_curve_radius_m, input_elevation_m und input_p_total_kw."
+            f"{kind}-Export fertig",
+            f"Gespeichert:\n{exported_path}\n\n{detail}",
         )
 
     @Slot(str)
     def _on_mat_export_failed(self, message: str) -> None:
-        self.statusBar().showMessage("MAT-Export fehlgeschlagen", 10000)
+        self.statusBar().showMessage(f"{self._active_export_kind}-Export fehlgeschlagen", 10000)
         QMessageBox.critical(self, "Export fehlgeschlagen", message)
 
     @Slot()
     def _on_mat_export_thread_finished(self) -> None:
         if self._mat_export_button is not None:
             self._mat_export_button.setEnabled(True)
-            self._mat_export_button.setText("MAT exportieren")
+            self._mat_export_button.setText("Exportieren (MAT / Excel)")
         self._mat_export_worker = None
         self._mat_export_thread = None
 
