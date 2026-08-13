@@ -104,6 +104,30 @@ def _write_cache_version(cache_path: Path) -> None:
     os.replace(temporary, marker)
 
 
+def _keep_cache_not_older_than_source(source_path: Path, cache_path: Path) -> None:
+    """Make timestamp-based cache checks robust after copied/downloaded PBFs.
+
+    Windows copies and manually downloaded PBF snapshots can carry a modification
+    timestamp that is newer than the GPKG created from them (for example because
+    the source timestamp was preserved or lies slightly in the future). The data
+    preparation layer historically interprets that situation as "PBF changed"
+    and would rebuild the same routing index on every application start.
+
+    After a successful build the cache is by definition based on this exact PBF,
+    so its mtime may safely be raised to at least the PBF mtime. This preserves
+    the existing cheap mtime invalidation while preventing endless rebuilds.
+    """
+
+    source_stat = source_path.stat()
+    cache_stat = cache_path.stat()
+    target_mtime_ns = max(cache_stat.st_mtime_ns, source_stat.st_mtime_ns)
+    if target_mtime_ns != cache_stat.st_mtime_ns:
+        os.utime(
+            cache_path,
+            ns=(cache_stat.st_atime_ns, target_mtime_ns),
+        )
+
+
 def build_routing_cache(
     source: str | Path,
     destination: str | Path | None = None,
@@ -250,6 +274,7 @@ def build_routing_cache(
         handler.apply_file(str(source_path), locations=True, idx="flex_mem")
         handler.finish()
         os.replace(temporary_path, output_path)
+        _keep_cache_not_older_than_source(source_path, output_path)
         _write_cache_version(output_path)
     except Exception:
         if temporary_path.exists():
