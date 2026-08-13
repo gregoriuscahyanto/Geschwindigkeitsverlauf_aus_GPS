@@ -8,12 +8,14 @@ from PySide6.QtWidgets import QApplication, QLabel
 
 try:
     from .integrated_speed_profile_v15 import IntegratedSpeedProfileWindow as _V15Window
+    from ...simulation_settings import PersistentSimulationSettingsMixin
 except ImportError:
     from integrated_speed_profile_v15 import IntegratedSpeedProfileWindow as _V15Window
+    from simulation_settings import PersistentSimulationSettingsMixin
 
 
-class IntegratedSpeedProfileWindow(_V15Window):
-    """V16: clean info-link wiring and stable simulation-QML backend lifetime."""
+class IntegratedSpeedProfileWindow(PersistentSimulationSettingsMixin, _V15Window):
+    """V16: stable QML lifetime plus route-embedded driver/project settings."""
 
     def __init__(self, route_path: str | Path | None = None) -> None:
         super().__init__(route_path)
