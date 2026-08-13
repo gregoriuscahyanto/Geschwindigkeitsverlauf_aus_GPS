@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject
 
-from .complete_app import CompleteApplicationWindow, main
+from .app_entry import CompleteApplicationWindow, main
 
 
 def _hide_only_manual_road_data_button(self: CompleteApplicationWindow) -> None:
@@ -22,10 +22,7 @@ def _hide_only_manual_road_data_button(self: CompleteApplicationWindow) -> None:
         self.manual_road_data_button_hidden = True
 
 
-# complete_app historically hid both the manual road-data chooser and the local
-# route-calculation button when GPX import was introduced. The Windows launcher
-# uses ``python -m qt_route_selector``; override only that obsolete UI policy so
-# users can choose either workflow: calculate from clicked points or import GPX.
+# Keep the automatic dataset selection, but show the normal local route button.
 CompleteApplicationWindow._hide_manual_road_data_button = _hide_only_manual_road_data_button
 
 
