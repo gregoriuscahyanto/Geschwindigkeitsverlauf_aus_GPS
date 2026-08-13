@@ -128,14 +128,39 @@ def _keep_cache_not_older_than_source(source_path: Path, cache_path: Path) -> No
         )
 
 
+def _location_index_spec(osmium_module: Any, location_index_path: Path) -> tuple[str, bool]:
+    """Prefer a disk-backed node-location index to keep PBF builds RAM-bounded.
+
+    ``locations=True`` requires Osmium to remember the coordinates of all OSM
+    nodes referenced by ways.  ``flex_mem`` keeps that index in memory and can
+    exhaust RAM on large regional extracts such as California.  PyOsmium exposes
+    the index types compiled into the current wheel; use ``sparse_file_array``
+    whenever it is available and retain ``flex_mem`` only as a compatibility
+    fallback for unusual builds that do not provide file-backed maps.
+    """
+
+    try:
+        available = set(osmium_module.index.map_types())
+    except Exception:
+        available = set()
+    if "sparse_file_array" in available:
+        return f"sparse_file_array,{location_index_path}", True
+    return "flex_mem", False
+
+
 def build_routing_cache(
     source: str | Path,
     destination: str | Path | None = None,
     *,
     progress: Callable[[str], None] | None = None,
-    batch_size: int = 15_000,
+    batch_size: int = 5_000,
 ) -> Path:
-    """Convert one OSM PBF into a spatially indexed GeoPackage in one scan."""
+    """Convert one OSM PBF into a spatially indexed GeoPackage in one scan.
+
+    Node locations are stored in a temporary file-backed Osmium index whenever
+    supported.  This deliberately trades some one-time build speed and disk I/O
+    for much lower peak RAM usage on large extracts.
+    """
 
     import geopandas as gpd
     import osmium
@@ -153,9 +178,13 @@ def build_routing_cache(
     temporary_path = output_path.with_name(
         output_path.stem + ".building" + output_path.suffix
     )
+    location_index_path = output_path.with_name(
+        output_path.stem + ".building.locations.idx"
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if temporary_path.exists():
-        temporary_path.unlink()
+    for stale in (temporary_path, location_index_path):
+        if stale.exists():
+            stale.unlink()
 
     def notify(message: str) -> None:
         if progress is not None:
@@ -239,6 +268,7 @@ def build_routing_cache(
             self._roads_layer_exists = True
             self.road_records.clear()
             self.road_geometries.clear()
+            del frame
             notify(f"PBF-Index: {self.roads_written:,} Straßen geschrieben …")
 
         def finish(self) -> None:
@@ -261,6 +291,7 @@ def build_routing_cache(
                     append=False,
                     layer_options={"SPATIAL_INDEX": "YES"},
                 )
+                del signals
             notify(
                 f"PBF-Index fertig: {self.roads_written:,} Straßen und "
                 f"{len(self.signal_records):,} Ampeln."
@@ -269,15 +300,37 @@ def build_routing_cache(
     notify(
         "PBF-Index wird einmalig aufgebaut. Das kann mehrere Minuten dauern …"
     )
+    index_spec, disk_backed = _location_index_spec(osmium, location_index_path)
+    if disk_backed:
+        notify(
+            "PBF-Index: speicherschonender Festplattenindex für OSM-Knoten aktiv …"
+        )
+    else:
+        notify(
+            "PBF-Index: dieser PyOsmium-Build bietet keinen Festplattenindex; "
+            "verwende Arbeitsspeicher …"
+        )
+
     handler = CacheHandler()
     try:
-        handler.apply_file(str(source_path), locations=True, idx="flex_mem")
+        handler.apply_file(str(source_path), locations=True, idx=index_spec)
         handler.finish()
         os.replace(temporary_path, output_path)
         _keep_cache_not_older_than_source(source_path, output_path)
         _write_cache_version(output_path)
-    except Exception:
+    except Exception as exc:
+        text = str(exc).lower()
+        if "bad alloc" in text or "bad allocation" in text:
+            raise RuntimeError(
+                "Der PBF-Index konnte wegen zu wenig verfügbarem Arbeitsspeicher nicht aufgebaut "
+                "werden. Die aktuelle Version verwendet nach Möglichkeit einen Festplattenindex. "
+                "Falls diese Meldung weiterhin erscheint, bitte ausreichend freien Speicherplatz "
+                "im OSM-Datenordner sicherstellen und die Anwendung neu starten."
+            ) from exc
+        raise
+    finally:
         if temporary_path.exists():
             temporary_path.unlink()
-        raise
+        if location_index_path.exists():
+            location_index_path.unlink()
     return output_path
