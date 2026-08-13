@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
@@ -92,10 +93,16 @@ class PersistentSimulationSettingsMixin:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._embedded_settings_token: tuple[str, int] | None = None
         self._applying_embedded_settings = False
-        super().__init__(*args, **kwargs)
+        self._embedded_settings_ready = False
         self._settings_status_label: QLabel | None = None
+        super().__init__(*args, **kwargs)
         self._install_settings_persistence_controls()
-        self._load_embedded_settings_if_present(force=True)
+        # The public simulation subclass installs additional controls (notably
+        # speed-limit policy / max points) after this base constructor returns.
+        # Defer the first restore until the event loop so every public control
+        # exists before the saved parameter set is applied.
+        self._embedded_settings_ready = True
+        QTimer.singleShot(0, lambda: self._load_embedded_settings_if_present(force=True))
 
     def _install_settings_persistence_controls(self) -> None:
         driver_group = next(
@@ -251,7 +258,7 @@ class PersistentSimulationSettingsMixin:
             self._apply_parameters(parameters)
 
     def _load_embedded_settings_if_present(self, *, force: bool = False) -> None:
-        if self._applying_embedded_settings:
+        if not self._embedded_settings_ready or self._applying_embedded_settings:
             return
         route_path = Path(getattr(self, "_route_path", "route_result.json")).expanduser().resolve()
         if not route_path.is_file():
@@ -291,7 +298,8 @@ class PersistentSimulationSettingsMixin:
 
     def reload_route(self, *_args: Any, silent: bool = False) -> None:
         super().reload_route(*_args, silent=silent)
-        self._load_embedded_settings_if_present()
+        if self._embedded_settings_ready:
+            self._load_embedded_settings_if_present()
 
 
 __all__ = [
