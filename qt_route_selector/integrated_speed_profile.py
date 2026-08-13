@@ -3,17 +3,21 @@ from __future__ import annotations
 import copy
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 from PySide6.QtCore import QObject, QSettings, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFileDialog,
+    QFormLayout,
     QFrame,
+    QGroupBox,
     QLabel,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QVBoxLayout,
 )
@@ -25,6 +29,13 @@ try:
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
     from .runtime_paths import exports_dir
+    from .speed_limit_policy import (
+        POLICY_GERMANY_POINTS,
+        POLICY_LABELS,
+        POLICY_OBEY,
+        install_integrated_speed_profile_policy,
+        normalize_policy,
+    )
     from .structure_elevation import correct_structure_elevation
 except ImportError:
     from _internal.simulation_layers import integrated_speed_profile as _base_layer
@@ -33,11 +44,19 @@ except ImportError:
         IntegratedSpeedProfileWindow as _CurrentWindow,
     )
     from runtime_paths import exports_dir
+    from speed_limit_policy import (
+        POLICY_GERMANY_POINTS,
+        POLICY_LABELS,
+        POLICY_OBEY,
+        install_integrated_speed_profile_policy,
+        normalize_policy,
+    )
     from structure_elevation import correct_structure_elevation
 
 # The implementation layers live below _internal, while QML resources remain
 # next to the public application modules.
 _base_layer.APP_DIR = Path(__file__).resolve().parent
+install_integrated_speed_profile_policy()
 
 
 class _MatExportWorker(QObject):
@@ -68,16 +87,100 @@ class IntegratedSpeedProfileWindow(_CurrentWindow):
 
     def __init__(self, route_path: str | Path | None = None) -> None:
         # super().__init__ may already build plots and therefore call the
-        # overridden _spatial_elevation method. Initialize this cache first.
+        # overridden _spatial_elevation/_update_plots methods. Initialize state first.
         self._structure_elevation_cache_key: tuple | None = None
         self._structure_elevation_cache_values: np.ndarray | None = None
         self._structure_elevation_stats: dict[str, int] = {}
+        self.speed_limit_policy_combo: QComboBox | None = None
+        self.max_speeding_points_spin: QSpinBox | None = None
+        self.speed_limit_policy_note: QLabel | None = None
         super().__init__(route_path)
         self._mat_export_thread: QThread | None = None
         self._mat_export_worker: _MatExportWorker | None = None
         self._mat_export_button: QPushButton | None = None
+        self._install_speed_limit_policy_controls()
         self._merge_summary_cards()
         self._configure_mat_export_ui()
+
+    def _install_speed_limit_policy_controls(self) -> None:
+        """Add an independent legal-speed strategy below the driver preset."""
+
+        driver_group = next(
+            (group for group in self.findChildren(QGroupBox) if group.title() == "Fahrer"),
+            None,
+        )
+        form = driver_group.layout() if driver_group is not None else None
+        if not isinstance(form, QFormLayout):
+            return
+
+        combo = QComboBox(driver_group)
+        for key, label in POLICY_LABELS.items():
+            combo.addItem(label, key)
+        combo.setToolTip(
+            "Legt fest, wie das OSM-Geschwindigkeitslimit die Fahrer-Simulation begrenzt. "
+            "Kurven-, Oberflächen- und Fahrzeuggrenzen bleiben unabhängig davon aktiv."
+        )
+
+        points = QSpinBox(driver_group)
+        points.setRange(0, 2)
+        points.setSingleStep(1)
+        points.setValue(0)
+        points.setSuffix(" Punkt(e)")
+        points.setKeyboardTracking(False)
+        points.setToolTip(
+            "Konservative Deutschland-Pkw-Näherung pro Geschwindigkeitsverstoß: "
+            "0 Punkte -> höchstens +20 km/h; 1 Punkt -> höchstens +30 km/h; "
+            "2 Punkte -> keine zusätzliche punktbedingte Obergrenze."
+        )
+
+        note = QLabel(driver_group)
+        note.setWordWrap(True)
+        note.setStyleSheet("color: palette(mid); font-size: 11px;")
+
+        form.addRow("Tempolimit-Strategie", combo)
+        form.addRow("Max. Punkte", points)
+        form.addRow(note)
+
+        self.speed_limit_policy_combo = combo
+        self.max_speeding_points_spin = points
+        self.speed_limit_policy_note = note
+        combo.currentIndexChanged.connect(self._speed_limit_policy_changed)
+        points.valueChanged.connect(self.schedule_recalculate)
+        self._speed_limit_policy_changed()
+
+    def _speed_limit_policy_changed(self, *_args: Any) -> None:
+        combo = self.speed_limit_policy_combo
+        points = self.max_speeding_points_spin
+        if combo is None or points is None:
+            return
+        policy = normalize_policy(combo.currentData())
+        points.setEnabled(policy == POLICY_GERMANY_POINTS)
+        if self.speed_limit_policy_note is not None:
+            if policy == POLICY_GERMANY_POINTS:
+                self.speed_limit_policy_note.setText(
+                    "Deutschland-Pkw, konservativ: Die App kennt inner-/außerorts nicht immer "
+                    "sicher und verwendet deshalb die strengere gemeinsame Punktegrenze."
+                )
+            elif policy == "ignore":
+                self.speed_limit_policy_note.setText(
+                    "Das OSM-Tempolimit wird ignoriert; Kurvenphysik, Straßenbelag und die "
+                    "absolute Fahrer-Obergrenze bleiben wirksam."
+                )
+            else:
+                self.speed_limit_policy_note.setText(
+                    "Das OSM-Tempolimit bleibt die normale rechtliche Geschwindigkeitsgrenze."
+                )
+        self.schedule_recalculate()
+
+    def parameters(self) -> dict[str, Any]:
+        values = super().parameters()
+        combo = self.speed_limit_policy_combo
+        points = self.max_speeding_points_spin
+        values["speed_limit_policy"] = normalize_policy(
+            combo.currentData() if combo is not None else POLICY_OBEY
+        )
+        values["max_speeding_points"] = int(points.value()) if points is not None else 0
+        return values
 
     def _spatial_elevation(self, sample_distance: np.ndarray) -> np.ndarray:
         """Use DEM/GPX heights, but not terrain heights inside tunnels/on bridges."""
