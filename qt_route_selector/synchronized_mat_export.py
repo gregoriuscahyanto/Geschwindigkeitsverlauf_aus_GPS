@@ -148,6 +148,31 @@ def _synchronized_signals(workspace: Mapping[str, Any]) -> dict[str, np.ndarray]
     return signals
 
 
+def _matlab_safe(value: Any) -> Any:
+    """Replace values that SciPy cannot serialize when a MAT struct is reloaded.
+
+    ``loadmat(..., simplify_cells=True)`` can represent empty MATLAB struct/cell
+    members as Python ``None``.  ``savemat`` cannot write those values back.
+    Keep the original ``sim`` struct, but turn only such empty members into
+    empty double arrays before the second save.
+    """
+
+    if value is None:
+        return np.empty((0, 1), dtype=np.float64)
+    if isinstance(value, Mapping):
+        return {str(key): _matlab_safe(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_matlab_safe(item) for item in value]
+    if isinstance(value, list):
+        return [_matlab_safe(item) for item in value]
+    if isinstance(value, np.ndarray) and value.dtype == object:
+        safe = np.empty(value.shape, dtype=object)
+        for index in np.ndindex(value.shape):
+            safe[index] = _matlab_safe(value[index])
+        return safe
+    return value
+
+
 def export_matlab_simulation(
     result: Mapping[str, Any],
     output_path: str | Path,
@@ -180,10 +205,19 @@ def export_matlab_simulation(
         comparison=comparison,
     )
 
+    # Preserve the original numeric workspace arrays exactly.  The one complex
+    # MATLAB struct is loaded separately in simplified form so it can be cleaned
+    # from Python None values before it is written again.
     loaded = loadmat(path)
     workspace: dict[str, Any] = {
-        key: value for key, value in loaded.items() if not key.startswith("__")
+        key: value
+        for key, value in loaded.items()
+        if not key.startswith("__") and key != "sim"
     }
+    simplified = loadmat(path, simplify_cells=True)
+    if "sim" in simplified:
+        workspace["sim"] = _matlab_safe(simplified["sim"])
+
     signals = _synchronized_signals(workspace)
 
     for name, value in signals.items():
