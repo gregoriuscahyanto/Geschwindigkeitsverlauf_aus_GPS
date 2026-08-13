@@ -77,6 +77,7 @@ AUSTRIA_DEM_DIRECTORY = "austria-dgm10"
 
 COPERNICUS_DEM_DIRECTORY = "copernicus-glo30"
 COPERNICUS_DEM_BASE_URL = "https://copernicus-dem-30m.s3.amazonaws.com"
+COPERNICUS_DEM_90_BASE_URL = "https://copernicus-dem-90m.s3.amazonaws.com"
 
 
 def _emit(progress: ProgressCallback | None, text: str, percent: int) -> None:
@@ -340,12 +341,26 @@ def _coordinate_pair(point: Mapping[str, object] | Sequence[float]) -> tuple[flo
     return float(point[0]), float(point[1])
 
 
-def copernicus_tile_id(latitude: float, longitude: float) -> str:
+def _copernicus_tile_id(latitude: float, longitude: float, resolution_arcsec: int) -> str:
     lat_floor = math.floor(float(latitude))
     lon_floor = math.floor(float(longitude))
     ns = "N" if lat_floor >= 0 else "S"
     ew = "E" if lon_floor >= 0 else "W"
-    return f"Copernicus_DSM_COG_10_{ns}{abs(lat_floor):02d}_00_{ew}{abs(lon_floor):03d}_00_DEM"
+    return (
+        f"Copernicus_DSM_COG_{int(resolution_arcsec):02d}_"
+        f"{ns}{abs(lat_floor):02d}_00_{ew}{abs(lon_floor):03d}_00_DEM"
+    )
+
+
+def copernicus_tile_id(latitude: float, longitude: float) -> str:
+    return _copernicus_tile_id(latitude, longitude, 10)
+
+
+def _copernicus_glo90_tile_id(glo30_tile_id: str) -> str:
+    prefix = "Copernicus_DSM_COG_10_"
+    if not str(glo30_tile_id).startswith(prefix):
+        raise ValueError(f"Ungültige Copernicus-GLO-30-Kachel: {glo30_tile_id}")
+    return "Copernicus_DSM_COG_30_" + str(glo30_tile_id)[len(prefix):]
 
 
 def copernicus_tiles_for_route(
@@ -389,25 +404,86 @@ def prepare_elevation_for_route(
     dem_directory = root / "elevation" / COPERNICUS_DEM_DIRECTORY
     dem_directory.mkdir(parents=True, exist_ok=True)
     total = len(tiles)
+    fallback_count = 0
     for index, tile_id in enumerate(tiles):
         start = int(index / total * 100)
         end = int((index + 1) / total * 100)
-        filename = f"{tile_id}.tif"
-        url = f"{COPERNICUS_DEM_BASE_URL}/{tile_id}/{filename}"
-        _download(
-            url,
-            dem_directory / filename,
-            progress,
-            start_percent=start,
-            end_percent=end,
-        )
 
-    _emit(progress, f"{total} Copernicus-Höhenkachel(n) für die Route sind lokal bereit.", 100)
+        glo30_filename = f"{tile_id}.tif"
+        glo30_path = dem_directory / glo30_filename
+        glo30_url = f"{COPERNICUS_DEM_BASE_URL}/{tile_id}/{glo30_filename}"
+
+        glo90_tile_id = _copernicus_glo90_tile_id(tile_id)
+        glo90_filename = f"{glo90_tile_id}.tif"
+        glo90_path = dem_directory / glo90_filename
+        glo90_url = f"{COPERNICUS_DEM_90_BASE_URL}/{glo90_tile_id}/{glo90_filename}"
+
+        if glo30_path.is_file() and glo30_path.stat().st_size > 0:
+            _download(
+                glo30_url,
+                glo30_path,
+                progress,
+                start_percent=start,
+                end_percent=end,
+            )
+            continue
+
+        # Once a region has needed the worldwide 90-m fallback, reuse it
+        # immediately. This is important for enterprise/offline laptops: do not
+        # wait for a doomed GLO-30 network request on every later route.
+        if glo90_path.is_file() and glo90_path.stat().st_size > 0:
+            fallback_count += 1
+            _emit(
+                progress,
+                f"Lokaler Copernicus-GLO-90-Fallback wird verwendet: {glo90_filename}",
+                end,
+            )
+            continue
+
+        try:
+            _download(
+                glo30_url,
+                glo30_path,
+                progress,
+                start_percent=start,
+                end_percent=end,
+            )
+        except Exception as glo30_error:
+            fallback_count += 1
+            _emit(
+                progress,
+                f"GLO-30-Kachel {tile_id} nicht verfügbar; versuche weltweiten GLO-90-Fallback …",
+                start,
+            )
+            try:
+                _download(
+                    glo90_url,
+                    glo90_path,
+                    progress,
+                    start_percent=start,
+                    end_percent=end,
+                )
+            except Exception as glo90_error:
+                raise RuntimeError(
+                    f"Copernicus-Höhenkachel nicht verfügbar: {tile_id}. "
+                    f"GLO-30: {glo30_error}; GLO-90: {glo90_error}"
+                ) from glo90_error
+
+    if fallback_count:
+        _emit(
+            progress,
+            f"{total} Copernicus-Höhenkachel(n) bereit; "
+            f"{fallback_count} davon nutzen den weltweiten GLO-90-Fallback.",
+            100,
+        )
+    else:
+        _emit(progress, f"{total} Copernicus-GLO-30-Höhenkachel(n) für die Route sind lokal bereit.", 100)
     return {
         "dataset": dataset_key,
         "dem_file": str(dem_directory.resolve()),
-        "provider": "copernicus_glo30",
+        "provider": "copernicus_glo30_glo90_fallback" if fallback_count else "copernicus_glo30",
         "tile_count": total,
+        "fallback_tile_count": fallback_count,
     }
 
 
