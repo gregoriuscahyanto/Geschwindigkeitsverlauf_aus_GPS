@@ -3,8 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from qt_route_selector.routing_cache import _location_index_spec
+from qt_route_selector.routing_cache import _best_effort_unlink, _location_index_spec
 
 
 class _IndexModule:
@@ -38,6 +39,19 @@ class RoutingCacheMemoryTests(unittest.TestCase):
         )
         self.assertFalse(disk_backed)
         self.assertEqual(spec, "flex_mem")
+
+    def test_locked_windows_temp_file_is_not_a_cleanup_failure(self) -> None:
+        locked = Path("locked.locations.idx")
+        error = PermissionError(13, "file in use", str(locked))
+        error.winerror = 32
+        with patch.object(Path, "unlink", side_effect=error):
+            removed = _best_effort_unlink(locked, attempts=1, delay_s=0.0)
+        self.assertFalse(removed)
+
+    def test_missing_temp_file_counts_as_cleaned(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "already-gone.idx"
+            self.assertTrue(_best_effort_unlink(missing, attempts=1, delay_s=0.0))
 
 
 if __name__ == "__main__":
