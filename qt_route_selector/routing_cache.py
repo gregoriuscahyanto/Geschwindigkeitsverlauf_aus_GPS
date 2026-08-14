@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import gc
 import os
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -105,18 +108,7 @@ def _write_cache_version(cache_path: Path) -> None:
 
 
 def _keep_cache_not_older_than_source(source_path: Path, cache_path: Path) -> None:
-    """Make timestamp-based cache checks robust after copied/downloaded PBFs.
-
-    Windows copies and manually downloaded PBF snapshots can carry a modification
-    timestamp that is newer than the GPKG created from them (for example because
-    the source timestamp was preserved or lies slightly in the future). The data
-    preparation layer historically interprets that situation as "PBF changed"
-    and would rebuild the same routing index on every application start.
-
-    After a successful build the cache is by definition based on this exact PBF,
-    so its mtime may safely be raised to at least the PBF mtime. This preserves
-    the existing cheap mtime invalidation while preventing endless rebuilds.
-    """
+    """Make timestamp-based cache checks robust after copied/downloaded PBFs."""
 
     source_stat = source_path.stat()
     cache_stat = cache_path.stat()
@@ -129,15 +121,7 @@ def _keep_cache_not_older_than_source(source_path: Path, cache_path: Path) -> No
 
 
 def _location_index_spec(osmium_module: Any, location_index_path: Path) -> tuple[str, bool]:
-    """Prefer a disk-backed node-location index to keep PBF builds RAM-bounded.
-
-    ``locations=True`` requires Osmium to remember the coordinates of all OSM
-    nodes referenced by ways.  ``flex_mem`` keeps that index in memory and can
-    exhaust RAM on large regional extracts such as California.  PyOsmium exposes
-    the index types compiled into the current wheel; use ``sparse_file_array``
-    whenever it is available and retain ``flex_mem`` only as a compatibility
-    fallback for unusual builds that do not provide file-backed maps.
-    """
+    """Prefer a disk-backed node-location index to keep PBF builds RAM-bounded."""
 
     try:
         available = set(osmium_module.index.map_types())
@@ -146,6 +130,33 @@ def _location_index_spec(osmium_module: Any, location_index_path: Path) -> tuple
     if "sparse_file_array" in available:
         return f"sparse_file_array,{location_index_path}", True
     return "flex_mem", False
+
+
+def _best_effort_unlink(path: Path, *, attempts: int = 8, delay_s: float = 0.25) -> bool:
+    """Remove a temporary build file without turning Windows file locks into build failures.
+
+    PyOsmium can release a file-backed location index slightly after ``apply_file``
+    returns. Windows refuses unlinking an open file (WinError 32), unlike POSIX.
+    Retry briefly and, if another process still owns the file, leave it behind;
+    every build uses a unique temporary filename so a stale file cannot block the
+    next build.
+    """
+
+    for attempt in range(max(1, attempts)):
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return True
+        except PermissionError:
+            if attempt + 1 >= attempts:
+                return False
+        except OSError as exc:
+            if getattr(exc, "winerror", None) != 32 or attempt + 1 >= attempts:
+                return False
+        time.sleep(delay_s)
+        gc.collect()
+    return False
 
 
 def build_routing_cache(
@@ -158,8 +169,9 @@ def build_routing_cache(
     """Convert one OSM PBF into a spatially indexed GeoPackage in one scan.
 
     Node locations are stored in a temporary file-backed Osmium index whenever
-    supported.  This deliberately trades some one-time build speed and disk I/O
-    for much lower peak RAM usage on large extracts.
+    supported. This trades some one-time build speed and disk I/O for much lower
+    peak RAM usage on large extracts. Temporary filenames are unique per build
+    so a stale Windows file lock can never block the next attempt.
     """
 
     import geopandas as gpd
@@ -175,16 +187,14 @@ def build_routing_cache(
         if destination
         else default_cache_path(source_path)
     )
+    build_token = f"{os.getpid()}-{uuid.uuid4().hex[:10]}"
     temporary_path = output_path.with_name(
-        output_path.stem + ".building" + output_path.suffix
+        f"{output_path.stem}.building.{build_token}{output_path.suffix}"
     )
     location_index_path = output_path.with_name(
-        output_path.stem + ".building.locations.idx"
+        f"{output_path.stem}.building.{build_token}.locations.idx"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    for stale in (temporary_path, location_index_path):
-        if stale.exists():
-            stale.unlink()
 
     def notify(message: str) -> None:
         if progress is not None:
@@ -297,24 +307,30 @@ def build_routing_cache(
                 f"{len(self.signal_records):,} Ampeln."
             )
 
-    notify(
-        "PBF-Index wird einmalig aufgebaut. Das kann mehrere Minuten dauern …"
-    )
+    notify("PBF-Index wird einmalig aufgebaut. Das kann mehrere Minuten dauern …")
     index_spec, disk_backed = _location_index_spec(osmium, location_index_path)
     if disk_backed:
-        notify(
-            "PBF-Index: speicherschonender Festplattenindex für OSM-Knoten aktiv …"
-        )
+        notify("PBF-Index: speicherschonender Festplattenindex für OSM-Knoten aktiv …")
     else:
         notify(
             "PBF-Index: dieser PyOsmium-Build bietet keinen Festplattenindex; "
             "verwende Arbeitsspeicher …"
         )
 
-    handler = CacheHandler()
+    def process_pbf() -> None:
+        # Keep the handler in this short-lived scope. On Windows the file-backed
+        # location index can remain locked for as long as the handler object is
+        # alive, even after apply_file() has returned.
+        handler = CacheHandler()
+        try:
+            handler.apply_file(str(source_path), locations=True, idx=index_spec)
+            handler.finish()
+        finally:
+            del handler
+
     try:
-        handler.apply_file(str(source_path), locations=True, idx=index_spec)
-        handler.finish()
+        process_pbf()
+        gc.collect()
         os.replace(temporary_path, output_path)
         _keep_cache_not_older_than_source(source_path, output_path)
         _write_cache_version(output_path)
@@ -329,8 +345,11 @@ def build_routing_cache(
             ) from exc
         raise
     finally:
-        if temporary_path.exists():
-            temporary_path.unlink()
-        if location_index_path.exists():
-            location_index_path.unlink()
+        gc.collect()
+        _best_effort_unlink(temporary_path)
+        if not _best_effort_unlink(location_index_path):
+            notify(
+                "PBF-Index: temporäre Osmium-Indexdatei ist unter Windows noch gesperrt; "
+                "sie wird beim nächsten Neustart nicht wiederverwendet und kann später gelöscht werden."
+            )
     return output_path
