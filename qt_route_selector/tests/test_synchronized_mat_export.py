@@ -8,7 +8,10 @@ import numpy as np
 from openpyxl import load_workbook
 from scipy.io import loadmat
 
-from qt_route_selector.synchronized_excel_export import export_excel_simulation
+from qt_route_selector.synchronized_excel_export import (
+    EXCEL_NO_LIMIT_SENTINEL,
+    export_excel_simulation,
+)
 from qt_route_selector.synchronized_mat_export import export_matlab_simulation
 
 
@@ -23,7 +26,7 @@ class SynchronizedMatExportTests(unittest.TestCase):
                 "curve_radius_m": np.asarray([np.inf, 80.0, 35.0, np.inf]),
                 "road_limit_kmh": np.asarray([50.0, 50.0, 30.0, 70.0]),
                 "surface_limit_kmh": np.asarray([50.0, 50.0, 30.0, 70.0]),
-                "curve_limit_kmh": np.asarray([140.0, 55.0, 32.0, 140.0]),
+                "curve_limit_kmh": np.asarray([np.inf, 55.0, 32.0, np.inf]),
                 "base_target_kmh": np.asarray([50.0, 50.0, 30.0, 70.0]),
                 "planned_speed_kmh": np.asarray([0.0, 35.0, 28.0, 0.0]),
                 "actual_speed_kmh": np.asarray([0.0, 34.0, 27.0, 0.0]),
@@ -100,7 +103,7 @@ class SynchronizedMatExportTests(unittest.TestCase):
         self.assertEqual(np.asarray(sim_input["curve_radius_m"]).size, 5)
         self.assertEqual(np.asarray(sim_input["post_curve_boost_kmh"]).size, 5)
 
-    def test_excel_simulation_sheet_uses_same_five_sample_grid(self) -> None:
+    def test_excel_simulation_sheet_uses_same_five_sample_grid_without_blanks(self) -> None:
         result, elevation, power = self._fixture()
         route = {
             "segments": [
@@ -134,17 +137,56 @@ class SynchronizedMatExportTests(unittest.TestCase):
                 "p_total_kw",
             }
             self.assertTrue(required.issubset(set(headers)), required - set(headers))
+            self.assertIn("Information", workbook.sheetnames)
             self.assertIn("Summary", workbook.sheetnames)
             self.assertIn("Parameters", workbook.sheetnames)
             self.assertIn("Drivers", workbook.sheetnames)
             self.assertIn("Traffic_Lights", workbook.sheetnames)
             self.assertIn("Segments", workbook.sheetnames)
 
+            # Every synchronous simulation cell is numeric. In particular, the
+            # fifth time sample must still contain an elevation although the
+            # spatial route fixture has only four points.
+            self.assertTrue(rows)
+            for row in rows:
+                self.assertEqual(len(row), len(headers))
+                self.assertTrue(all(value is not None for value in row), row)
+
             time_column = headers.index("time_s")
             speed_column = headers.index("v_kmh")
+            elevation_column = headers.index("elevation_m")
+            radius_column = headers.index("curve_radius_m")
+            curve_limit_column = headers.index("v_curve_limit_kmh")
             self.assertEqual([row[time_column] for row in rows], [0, 2, 4, 6, 8])
             self.assertEqual([row[speed_column] for row in rows], [0, 25, 31, 27, 0])
+            self.assertIsNotNone(rows[-1][elevation_column])
+            self.assertEqual(rows[-1][elevation_column], 408.0)
+            self.assertEqual(rows[0][radius_column], EXCEL_NO_LIMIT_SENTINEL)
+            self.assertEqual(rows[-1][radius_column], EXCEL_NO_LIMIT_SENTINEL)
+            self.assertEqual(rows[0][curve_limit_column], EXCEL_NO_LIMIT_SENTINEL)
+            self.assertEqual(rows[-1][curve_limit_column], EXCEL_NO_LIMIT_SENTINEL)
+
+            info = workbook["Information"]
+            info_rows = list(info.iter_rows(min_row=2, values_only=True))
+            channel_rows = [row for row in info_rows if isinstance(row[0], int)]
+            self.assertEqual(len(channel_rows), len(headers))
+            self.assertTrue(all(row[2] == 5 for row in channel_rows))
+            self.assertTrue(all(row[3] == 0 for row in channel_rows))
             workbook.close()
+
+    def test_excel_refuses_stale_shorter_time_series_instead_of_padding_blanks(self) -> None:
+        result, elevation, power = self._fixture()
+        power = dict(power)
+        power["total_kw"] = np.asarray([0.0, 12.0, 18.0, 7.0])
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with self.assertRaisesRegex(ValueError, "p_total_kw"):
+                export_excel_simulation(
+                    result,
+                    Path(temporary_directory) / "broken.xlsx",
+                    power_data=power,
+                    elevation_m=elevation,
+                )
 
 
 if __name__ == "__main__":
