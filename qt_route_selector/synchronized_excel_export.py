@@ -18,6 +18,16 @@ except ImportError:
 
 
 EXCEL_MAX_DATA_ROWS = 1_048_575
+EXCEL_NO_LIMIT_SENTINEL = 65_535.0
+
+# Positive infinity has a useful physical meaning for these channels: no finite
+# curve restriction / effectively straight road. Excel should still receive a
+# numeric value in every row, so use one documented finite sentinel instead of
+# silently writing an empty cell.
+_INFINITY_SENTINEL_SIGNALS = {
+    "curve_radius_m",
+    "v_curve_limit_kmh",
+}
 
 _PREFERRED_INPUT_ORDER = (
     "sample_index",
@@ -83,6 +93,69 @@ def _ordered_input_names(inputs: Mapping[str, np.ndarray]) -> list[str]:
     return preferred + remaining
 
 
+def _normalize_simulation_inputs(
+    inputs: Mapping[str, np.ndarray],
+) -> tuple[dict[str, np.ndarray], dict[str, int]]:
+    """Return one complete numeric Excel table on the input_time_s master grid.
+
+    Length mismatches and unexpected NaN/inf values are export errors. This is
+    intentional: a visibly failed export is much safer than a workbook where one
+    signal silently ends earlier than the others. Only +inf in the documented
+    no-curve-limit channels is converted to a finite numeric sentinel.
+    """
+
+    if "time_s" not in inputs:
+        raise ValueError("Der synchronisierte Excel-Export enthält keinen Zeitvektor input_time_s.")
+
+    n = int(np.asarray(inputs["time_s"]).size)
+    if n <= 0:
+        raise ValueError("Der synchronisierte Excel-Export enthält keine Zeitschritte.")
+
+    invalid_lengths = {
+        name: int(np.asarray(values).size)
+        for name, values in inputs.items()
+        if np.asarray(values).size != n
+    }
+    if invalid_lengths:
+        raise ValueError(
+            "Excel-Simulationssignale haben unterschiedliche Längen. "
+            f"Masterlänge input_time_s={n}; abweichend: {invalid_lengths}"
+        )
+
+    normalized: dict[str, np.ndarray] = {}
+    substitutions: dict[str, int] = {}
+    for name, values in inputs.items():
+        array = np.asarray(values, dtype=np.float64).reshape(-1).copy()
+        nan_count = int(np.count_nonzero(np.isnan(array)))
+        neg_inf_count = int(np.count_nonzero(np.isneginf(array)))
+        pos_inf = np.isposinf(array)
+        pos_inf_count = int(np.count_nonzero(pos_inf))
+
+        if nan_count or neg_inf_count:
+            raise ValueError(
+                f"Excel-Signal '{name}' enthält {nan_count} NaN und "
+                f"{neg_inf_count} -inf. Der Export wird abgebrochen, damit keine "
+                "unbemerkten leeren Zellen entstehen."
+            )
+
+        if pos_inf_count:
+            if name not in _INFINITY_SENTINEL_SIGNALS:
+                raise ValueError(
+                    f"Excel-Signal '{name}' enthält {pos_inf_count} +inf-Werte. "
+                    "Für diesen Kanal ist kein Excel-Ersatzwert definiert."
+                )
+            array[pos_inf] = EXCEL_NO_LIMIT_SENTINEL
+            substitutions[name] = pos_inf_count
+        else:
+            substitutions[name] = 0
+
+        if not np.all(np.isfinite(array)):
+            raise ValueError(f"Excel-Signal '{name}' ist nach der Normalisierung nicht vollständig numerisch.")
+        normalized[name] = array
+
+    return normalized, substitutions
+
+
 def _header_style(sheet) -> None:
     fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
     for cell in sheet[1]:
@@ -111,6 +184,50 @@ def _write_key_value_sheet(workbook: Workbook, title: str, values: Mapping[str, 
         sheet.append([str(key), _excel_value(value)])
     _header_style(sheet)
     _fit_columns(sheet)
+
+
+def _write_information_sheet(
+    workbook: Workbook,
+    names: Sequence[str],
+    inputs: Mapping[str, np.ndarray],
+    substitutions: Mapping[str, int],
+) -> None:
+    sheet = workbook.create_sheet("Information")
+    sheet.append(
+        [
+            "Spalte",
+            "Datenkanal",
+            "Anzahl Werte",
+            "Leere Zellen",
+            "Ersetzte +inf",
+            "Datentyp",
+        ]
+    )
+    for index, name in enumerate(names, start=1):
+        values = np.asarray(inputs[name], dtype=np.float64).reshape(-1)
+        sheet.append(
+            [
+                index,
+                name,
+                int(values.size),
+                0,
+                int(substitutions.get(name, 0)),
+                "double",
+            ]
+        )
+    sheet.append([])
+    sheet.append(
+        [
+            None,
+            "Hinweis",
+            None,
+            None,
+            None,
+            f"+inf in Kurvenkanälen wird als {EXCEL_NO_LIMIT_SENTINEL:g} exportiert.",
+        ]
+    )
+    _header_style(sheet)
+    _fit_columns(sheet, max_width=48)
 
 
 def _record_rows(records: Sequence[Any]) -> tuple[list[str], list[list[Any]]]:
@@ -193,15 +310,15 @@ def export_excel_simulation(
     source_dem: str | Path | None = None,
     comparison: Mapping[str, Any] | None = None,
 ) -> Path:
-    """Export the synchronized MAT input contract as a readable XLSX workbook."""
+    """Export the synchronized MAT input contract as a complete numeric XLSX workbook."""
 
     path = Path(output_path).expanduser().resolve()
     if path.suffix.lower() != ".xlsx":
         path = path.with_suffix(".xlsx")
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Reuse the already tested synchronized MAT contract rather than maintaining
-    # a second independent resampling implementation for Excel.
+    # Reuse the synchronized MAT contract so MAT and Excel can never implement
+    # independent time-grid/resampling rules.
     with tempfile.TemporaryDirectory(prefix="gps_excel_export_") as temporary_directory:
         mat_path = export_matlab_simulation(
             result,
@@ -216,25 +333,23 @@ def export_excel_simulation(
         )
         workspace = loadmat(mat_path, simplify_cells=True)
 
-    inputs: dict[str, np.ndarray] = {}
+    raw_inputs: dict[str, np.ndarray] = {}
     for name, value in workspace.items():
         if not name.startswith("input_"):
             continue
         signal = _flat_numeric(value)
         if signal.size:
-            inputs[name[len("input_") :]] = signal
-    if not inputs or "time_s" not in inputs:
+            raw_inputs[name[len("input_") :]] = signal
+    if not raw_inputs or "time_s" not in raw_inputs:
         raise ValueError("Der synchronisierte Excel-Export enthält keinen Zeitvektor input_time_s.")
 
+    inputs, substitutions = _normalize_simulation_inputs(raw_inputs)
     n = int(inputs["time_s"].size)
     if n > EXCEL_MAX_DATA_ROWS:
         raise ValueError(
             f"Die Simulation enthält {n:,} Zeitschritte. Excel unterstützt pro Tabellenblatt "
             f"höchstens {EXCEL_MAX_DATA_ROWS:,} Datenzeilen."
         )
-    invalid = {name: int(values.size) for name, values in inputs.items() if values.size != n}
-    if invalid:
-        raise ValueError(f"Excel-Simulationssignale haben unterschiedliche Längen: {invalid}")
 
     workbook = Workbook()
     simulation = workbook.active
@@ -242,9 +357,13 @@ def export_excel_simulation(
     names = _ordered_input_names(inputs)
     simulation.append(names)
     for row_index in range(n):
-        simulation.append([_excel_value(inputs[name][row_index]) for name in names])
+        # The inputs have already been validated as finite numeric N-vectors, so
+        # no simulation cell can silently become blank at this point.
+        simulation.append([float(inputs[name][row_index]) for name in names])
     _header_style(simulation)
     _fit_columns(simulation, max_width=25)
+
+    _write_information_sheet(workbook, names, inputs, substitutions)
 
     summary = result.get("summary", {})
     if isinstance(summary, Mapping):
@@ -268,4 +387,8 @@ def export_excel_simulation(
     return path
 
 
-__all__ = ["EXCEL_MAX_DATA_ROWS", "export_excel_simulation"]
+__all__ = [
+    "EXCEL_MAX_DATA_ROWS",
+    "EXCEL_NO_LIMIT_SENTINEL",
+    "export_excel_simulation",
+]
