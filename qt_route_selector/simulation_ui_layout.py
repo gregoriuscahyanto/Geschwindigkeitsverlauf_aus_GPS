@@ -4,6 +4,7 @@ from typing import Any
 
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -22,13 +23,27 @@ _OVERSHOOT_KEYS = (
     "post_curve_overshoot_distance_m",
 )
 
+_CHECKBOX_STYLE = (
+    "QCheckBox {"
+    " spacing:7px; padding:3px 8px 3px 5px; min-height:22px;"
+    " border:1px solid palette(mid); border-radius:5px;"
+    " background:palette(base); font-weight:600;"
+    "}"
+    "QCheckBox:checked {"
+    " border:1px solid palette(highlight);"
+    " background:palette(alternate-base);"
+    "}"
+    "QCheckBox:hover { border:1px solid palette(highlight); }"
+    "QCheckBox::indicator { width:18px; height:18px; }"
+)
+
 
 class SimulationUiLayoutMixin:
     """Current sidebar organization without changing simulation semantics.
 
-    The historical UI grew in several inheritance layers.  This mixin only moves
-    already existing widgets after construction, so parameter keys, persistence,
-    calculations and exports keep using exactly the same controls.
+    The historical UI grew in several inheritance layers. This mixin only moves
+    or hides already existing widgets after construction, so parameter keys,
+    persistence, calculations and exports keep using exactly the same controls.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -39,6 +54,7 @@ class SimulationUiLayoutMixin:
         self._reorganize_simulation_sidebar()
         self._simulation_ui_layout_ready = True
         self._place_project_controls_in_route()
+        self._style_parameter_checkboxes()
         self._install_collapsible_parameter_cards()
 
     @staticmethod
@@ -47,6 +63,23 @@ class SimulationUiLayoutMixin:
             (group for group in window.findChildren(QGroupBox) if group.title() == title),
             None,
         )
+
+    @classmethod
+    def _group_form(cls, window: QWidget, title: str) -> QFormLayout | None:
+        """Return the form inside a parameter card, even when wrapped in a page.
+
+        The old tab-to-card conversion creates a QGroupBox with a QVBoxLayout and
+        puts the former tab page inside it. Therefore the QFormLayout is usually
+        one level below the group rather than being the group's direct layout.
+        """
+
+        group = cls._group(window, title)
+        if group is None:
+            return None
+        direct = group.layout()
+        if isinstance(direct, QFormLayout):
+            return direct
+        return next(iter(group.findChildren(QFormLayout)), None)
 
     @staticmethod
     def _form_containing(window: QWidget, widget: QWidget) -> tuple[QFormLayout | None, int]:
@@ -87,14 +120,41 @@ class SimulationUiLayoutMixin:
             target.addRow(label_widget, widget)
         else:
             target.addRow(widget)
+        source.invalidate()
+        target.invalidate()
+
+    def _hide_form_control(self, key: str) -> None:
+        """Remove one control row from the visible UI but keep its model value.
+
+        Keeping the widget in _control_widgets preserves route-file compatibility
+        and deterministic simulations while avoiding a misleading control in the
+        wrong parameter card.
+        """
+
+        widget = getattr(self, "_control_widgets", {}).get(key)
+        if not isinstance(widget, QWidget):
+            return
+        source, row = self._form_containing(self, widget)
+        if source is None or row < 0:
+            widget.hide()
+            return
+        for item in self._form_row_widgets(source, row):
+            source.removeWidget(item)
+            item.hide()
+        source.invalidate()
 
     def _move_overshoot_controls_to_curves(self) -> None:
-        curves = self._group(self, "Kurven")
-        target = curves.layout() if curves is not None else None
-        if not isinstance(target, QFormLayout):
+        target = self._group_form(self, "Kurven")
+        if target is None:
             return
         for key in _OVERSHOOT_KEYS:
             self._move_form_control(key, target)
+
+    def _remove_random_seed_from_noise_card(self) -> None:
+        # simulation_seed is a global deterministic simulation seed, not a
+        # driver-noise parameter. Keep the value for reproducibility/persistence
+        # but do not present it inside the Rauschen card.
+        self._hide_form_control("simulation_seed")
 
     def _detach_persistence_controls_from_driver(self) -> None:
         save_button = getattr(self, "settings_save_button", None)
@@ -116,7 +176,7 @@ class SimulationUiLayoutMixin:
 
     def _show_advanced_groups_directly(self) -> None:
         # V10 intentionally put these groups behind a single "Weitere Parameter"
-        # disclosure.  The current UI shows the cards directly instead.
+        # disclosure. The current UI shows the cards directly instead.
         disclosure = getattr(self, "advanced_parameters_button", None)
         if isinstance(disclosure, QToolButton):
             disclosure.hide()
@@ -131,7 +191,38 @@ class SimulationUiLayoutMixin:
     def _reorganize_simulation_sidebar(self) -> None:
         self._detach_persistence_controls_from_driver()
         self._move_overshoot_controls_to_curves()
+        self._remove_random_seed_from_noise_card()
         self._show_advanced_groups_directly()
+
+    @staticmethod
+    def _set_checkbox_state_text(widget: QCheckBox, checked: bool) -> None:
+        widget.setText("Ein" if checked else "Aus")
+
+    def _style_parameter_checkboxes(self) -> None:
+        """Make boolean controls visibly recognizable and easy to click."""
+
+        controls = getattr(self, "_control_widgets", {})
+        for widget in controls.values():
+            if not isinstance(widget, QCheckBox) or widget.isHidden():
+                continue
+            widget.setMinimumWidth(72)
+            widget.setCursor(Qt.CursorShape.PointingHandCursor)
+            widget.setStyleSheet(_CHECKBOX_STYLE)
+            self._set_checkbox_state_text(widget, widget.isChecked())
+            if not bool(widget.property("clearCheckboxStateTextConnected")):
+                widget.toggled.connect(
+                    lambda checked, current=widget: self._set_checkbox_state_text(
+                        current, bool(checked)
+                    )
+                )
+                widget.setProperty("clearCheckboxStateTextConnected", True)
+
+    def _refresh_control_highlights(self, changed: set[str]) -> None:
+        # V13 restores each widget's original stylesheet whenever parameters are
+        # recalculated. Re-apply the accessibility styling afterwards so the
+        # checkboxes stay visible instead of reverting to the tiny native mark.
+        super()._refresh_control_highlights(changed)
+        self._style_parameter_checkboxes()
 
     def _place_project_controls_in_route(self) -> None:
         if not self._simulation_ui_layout_ready:
@@ -143,7 +234,7 @@ class SimulationUiLayoutMixin:
         if not isinstance(layout, QGridLayout) or not isinstance(save_button, QPushButton):
             return
 
-        # Remove all movable route widgets first.  The inherited responsive
+        # Remove all movable route widgets first. The inherited responsive
         # reflow may call this method repeatedly when the sidebar width changes.
         dem_title = getattr(self, "_dem_title_label", None)
         dem_status = getattr(self, "dem_status_label", None)
