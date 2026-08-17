@@ -4,9 +4,12 @@ from pathlib import Path
 import unittest
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QFrame, QTextBrowser
+from PySide6.QtWidgets import QApplication, QCheckBox, QFrame, QGroupBox, QTextBrowser, QWidget
 
-from qt_route_selector.integrated_speed_profile import IntegratedSpeedProfileWindow
+from qt_route_selector.app_entry import _install_persistent_simulation_window
+
+
+IntegratedSpeedProfileWindow = _install_persistent_simulation_window()
 
 
 class CurrentSimulationUiTests(unittest.TestCase):
@@ -20,6 +23,15 @@ class CurrentSimulationUiTests(unittest.TestCase):
         window.show()
         self.app.processEvents()
         return window
+
+    @staticmethod
+    def _ancestor_group(widget: QWidget) -> QGroupBox | None:
+        parent = widget.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QGroupBox):
+                return parent
+            parent = parent.parentWidget()
+        return None
 
     def test_current_shell_is_compact_and_responsive(self) -> None:
         window = self.make_window()
@@ -68,6 +80,46 @@ class CurrentSimulationUiTests(unittest.TestCase):
             self.app.processEvents()
             self.assertAlmostEqual(float(kp.value()), baseline, places=6)
             self.assertIn("Preset unverändert", window.parameter_change_label.text())
+        finally:
+            window.close()
+            self.app.processEvents()
+
+    def test_overshoot_controls_live_in_curves_and_seed_is_not_shown_in_noise(self) -> None:
+        window = self.make_window()
+        try:
+            for key in (
+                "use_post_curve_overshoot",
+                "post_curve_overshoot_kmh",
+                "post_curve_overshoot_probability_pct",
+                "post_curve_overshoot_distance_m",
+            ):
+                group = self._ancestor_group(window._control_widgets[key])
+                self.assertIsNotNone(group, key)
+                self.assertEqual(group.title(), "Kurven", key)
+
+            seed = window._control_widgets["simulation_seed"]
+            self.assertTrue(seed.isHidden())
+            form, row = window._form_containing(window, seed)
+            self.assertIsNone(form)
+            self.assertEqual(row, -1)
+        finally:
+            window.close()
+            self.app.processEvents()
+
+    def test_boolean_controls_have_visible_state_text_and_larger_click_target(self) -> None:
+        window = self.make_window()
+        try:
+            checkbox = window._control_widgets["apply_curve_speed"]
+            self.assertIsInstance(checkbox, QCheckBox)
+            self.assertGreaterEqual(checkbox.minimumWidth(), 72)
+            self.assertEqual(checkbox.text(), "Ein" if checkbox.isChecked() else "Aus")
+
+            checkbox.setChecked(False)
+            self.app.processEvents()
+            self.assertEqual(checkbox.text(), "Aus")
+            checkbox.setChecked(True)
+            self.app.processEvents()
+            self.assertEqual(checkbox.text(), "Ein")
         finally:
             window.close()
             self.app.processEvents()
