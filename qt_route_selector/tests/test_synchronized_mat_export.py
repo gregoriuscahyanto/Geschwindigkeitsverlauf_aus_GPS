@@ -12,7 +12,10 @@ from qt_route_selector.synchronized_excel_export import (
     EXCEL_NO_LIMIT_SENTINEL,
     export_excel_simulation,
 )
-from qt_route_selector.synchronized_mat_export import export_matlab_simulation
+from qt_route_selector.synchronized_mat_export import (
+    MAT_NO_LIMIT_SENTINEL,
+    export_matlab_simulation,
+)
 
 
 class SynchronizedMatExportTests(unittest.TestCase):
@@ -40,7 +43,11 @@ class SynchronizedMatExportTests(unittest.TestCase):
                 "target_kmh": np.asarray([0.0, 30.0, 35.0, 30.0, 0.0]),
                 "acceleration_mps2": np.asarray([0.0, 1.2, 0.3, -0.8, -1.5]),
             },
-            "events": {"traffic_lights": [{"distance_m": 44.0, "dwell_s": 20.0}]},
+            "events": {
+                "traffic_lights": [{"distance_m": 44.0, "dwell_s": 2.0}],
+                "traffic_light_dwell_intervals_s": [[4.0, 6.0]],
+                "overtaking": [{"follow_start_m": 18.0, "pass_end_m": 73.0}],
+            },
             "summary": {"distance_km": 0.1, "duration_min": 0.1333},
         }
         elevation = np.asarray([400.0, 405.0, 410.0, 408.0])
@@ -57,51 +64,88 @@ class SynchronizedMatExportTests(unittest.TestCase):
             "cumulative_traction_energy_kwh": np.zeros(5),
             "cumulative_recuperation_energy_kwh": np.zeros(5),
             "cumulative_net_energy_kwh": np.zeros(5),
+            "traction_energy_kwh": 0.25,
         }
         return result, elevation, power
 
-    def test_all_simulation_inputs_share_time_length(self) -> None:
+    def test_every_mat_variable_has_same_length_and_only_finite_values(self) -> None:
         result, elevation, power = self._fixture()
+        parameters = {
+            "driver_hard_max_kmh": 140.0,
+            "temperament": 1.0,
+            "simulation_seed": 42,
+        }
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             path = export_matlab_simulation(
                 result,
                 Path(temporary_directory) / "sync.mat",
+                parameters=parameters,
                 power_data=power,
                 elevation_m=elevation,
             )
-            loaded = loadmat(path, simplify_cells=True)
+            loaded = loadmat(path)
 
-        input_names = sorted(name for name in loaded if name.startswith("input_"))
-        self.assertTrue(input_names)
-        sizes = {np.asarray(loaded[name]).size for name in input_names}
-        self.assertEqual(sizes, {5})
+        variables = {
+            name: np.asarray(value, dtype=float)
+            for name, value in loaded.items()
+            if not name.startswith("__")
+        }
+        self.assertTrue(variables)
+
+        # New hard MAT contract: there are no structs, scalar metadata, route
+        # arrays or event lists with another natural length. Every stored
+        # variable is exactly one finite N x 1 signal.
+        self.assertEqual({array.shape for array in variables.values()}, {(5, 1)})
+        self.assertTrue(all(np.all(np.isfinite(array)) for array in variables.values()))
 
         required = {
+            "time_s",
+            "distance_m",
+            "v_kmh",
+            "curve_radius_m",
+            "elevation_m",
+            "grade_pct",
+            "lat_deg",
+            "lon_deg",
+            "v_road_limit_kmh",
+            "p_total_kw",
+            "post_curve_boost_kmh",
+            "traffic_light_stop",
+            "traffic_light_active",
+            "traffic_light_dwell_s",
+            "overtaking_active",
+            "param_driver_hard_max_kmh",
+            "summary_distance_km",
             "input_time_s",
-            "input_distance_m",
-            "input_v_kmh",
-            "input_curve_radius_m",
             "input_elevation_m",
-            "input_grade_pct",
-            "input_lat_deg",
-            "input_lon_deg",
-            "input_v_road_limit_kmh",
-            "input_p_total_kw",
-            "input_post_curve_boost_kmh",
         }
-        self.assertTrue(required.issubset(loaded.keys()), required - loaded.keys())
+        self.assertTrue(required.issubset(variables.keys()), required - variables.keys())
 
-        sim_input = loaded["sim_input"]
-        self.assertIsInstance(sim_input, dict)
-        self.assertEqual(
-            {np.asarray(value).size for value in sim_input.values()},
-            {5},
+        np.testing.assert_allclose(variables["time_s"].ravel(), [0, 2, 4, 6, 8])
+        np.testing.assert_allclose(variables["v_kmh"].ravel(), [0, 25, 31, 27, 0])
+        np.testing.assert_allclose(variables["elevation_m"].ravel(), [400.0, 403.0, 407.0, 409.8, 408.0])
+        np.testing.assert_allclose(
+            variables["param_driver_hard_max_kmh"].ravel(),
+            np.full(5, 140.0),
         )
-        np.testing.assert_allclose(np.asarray(sim_input["time_s"]).ravel(), [0, 2, 4, 6, 8])
-        np.testing.assert_allclose(np.asarray(sim_input["v_kmh"]).ravel(), [0, 25, 31, 27, 0])
-        self.assertEqual(np.asarray(sim_input["curve_radius_m"]).size, 5)
-        self.assertEqual(np.asarray(sim_input["post_curve_boost_kmh"]).size, 5)
+        self.assertEqual(variables["curve_radius_m"][0, 0], MAT_NO_LIMIT_SENTINEL)
+        self.assertEqual(variables["curve_radius_m"][-1, 0], MAT_NO_LIMIT_SENTINEL)
+        self.assertEqual(variables["v_curve_limit_kmh"][0, 0], MAT_NO_LIMIT_SENTINEL)
+        self.assertEqual(variables["v_curve_limit_kmh"][-1, 0], MAT_NO_LIMIT_SENTINEL)
+
+    def test_mat_refuses_completely_missing_required_elevation(self) -> None:
+        result, _elevation, power = self._fixture()
+        missing_elevation = np.full(4, np.nan)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with self.assertRaisesRegex(ValueError, "elevation_m"):
+                export_matlab_simulation(
+                    result,
+                    Path(temporary_directory) / "broken.mat",
+                    power_data=power,
+                    elevation_m=missing_elevation,
+                )
 
     def test_excel_simulation_sheet_uses_same_five_sample_grid_without_blanks(self) -> None:
         result, elevation, power = self._fixture()
@@ -144,9 +188,6 @@ class SynchronizedMatExportTests(unittest.TestCase):
             self.assertIn("Traffic_Lights", workbook.sheetnames)
             self.assertIn("Segments", workbook.sheetnames)
 
-            # Every synchronous simulation cell is numeric. In particular, the
-            # fifth time sample must still contain an elevation although the
-            # spatial route fixture has only four points.
             self.assertTrue(rows)
             for row in rows:
                 self.assertEqual(len(row), len(headers))
