@@ -9,7 +9,7 @@ from .runtime_paths import data_dir, route_result_path
 
 
 def _install_persistent_simulation_window() -> type:
-    """Make the normal simulation window include route-embedded settings controls.
+    """Install the route-bound persistence, elevation restore and current sidebar UI.
 
     The import is deliberately lazy so the large simulation UI is still loaded
     only when tab 2 is opened.
@@ -17,9 +17,10 @@ def _install_persistent_simulation_window() -> type:
 
     from . import integrated_speed_profile as public_module
     from .simulation_settings import PersistentSimulationSettingsMixin
+    from .simulation_ui_layout import SimulationUiLayoutMixin
 
     base_window = public_module.IntegratedSpeedProfileWindow
-    if issubclass(base_window, PersistentSimulationSettingsMixin):
+    if bool(getattr(base_window, "_route_app_extensions_installed", False)):
         return base_window
 
     class RouteElevationRestoreMixin:
@@ -41,15 +42,28 @@ def _install_persistent_simulation_window() -> type:
             if callable(setter):
                 setter(str(source))
 
-    class PersistentIntegratedSpeedProfileWindow(
-        PersistentSimulationSettingsMixin,
-        RouteElevationRestoreMixin,
-        base_window,
-    ):
-        """Current simulation UI with route-bound settings and elevation data."""
+    if issubclass(base_window, PersistentSimulationSettingsMixin):
+
+        class PersistentIntegratedSpeedProfileWindow(
+            SimulationUiLayoutMixin,
+            RouteElevationRestoreMixin,
+            base_window,
+        ):
+            """Current simulation UI with route-bound project state and compact cards."""
+
+    else:
+
+        class PersistentIntegratedSpeedProfileWindow(
+            SimulationUiLayoutMixin,
+            PersistentSimulationSettingsMixin,
+            RouteElevationRestoreMixin,
+            base_window,
+        ):
+            """Current simulation UI with route-bound project state and compact cards."""
 
     PersistentIntegratedSpeedProfileWindow.__name__ = "IntegratedSpeedProfileWindow"
     PersistentIntegratedSpeedProfileWindow.__qualname__ = "IntegratedSpeedProfileWindow"
+    PersistentIntegratedSpeedProfileWindow._route_app_extensions_installed = True
     public_module.IntegratedSpeedProfileWindow = PersistentIntegratedSpeedProfileWindow
     return PersistentIntegratedSpeedProfileWindow
 
