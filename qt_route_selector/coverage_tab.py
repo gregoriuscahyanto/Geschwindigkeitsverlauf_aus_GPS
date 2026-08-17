@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 from PySide6.QtCore import QFileSystemWatcher, QUrl, Qt
@@ -28,6 +29,10 @@ except ImportError:
 
 
 APP_DIR = Path(__file__).resolve().parent
+GEOFABRIK_DOWNLOAD_URL = "https://download.geofabrik.de/"
+COPERNICUS_DEM_INFO_URL = "https://copernicus-dem-30m.s3.amazonaws.com/readme.html"
+COPERNICUS_GLO30_TILE_LIST_URL = "https://copernicus-dem-30m.s3.amazonaws.com/tileList.txt"
+COPERNICUS_GLO90_TILE_LIST_URL = "https://copernicus-dem-90m.s3.amazonaws.com/tileList.txt"
 
 
 class CoverageTab(QWidget):
@@ -46,6 +51,8 @@ class CoverageTab(QWidget):
 
         self.osm_directory = self.data_root / "osm"
         self.osm_directory.mkdir(parents=True, exist_ok=True)
+        self.elevation_directory = self.data_root / "elevation" / "copernicus-glo30"
+        self.elevation_directory.mkdir(parents=True, exist_ok=True)
         self.directory_watcher = QFileSystemWatcher(self)
         self.directory_watcher.addPath(str(self.osm_directory))
         self.directory_watcher.directoryChanged.connect(self._osm_directory_changed)
@@ -69,8 +76,8 @@ class CoverageTab(QWidget):
 
         side = QFrame(self)
         side.setFrameShape(QFrame.Shape.StyledPanel)
-        side.setMinimumWidth(330)
-        side.setMaximumWidth(410)
+        side.setMinimumWidth(350)
+        side.setMaximumWidth(450)
         side_layout = QVBoxLayout(side)
         side_layout.setContentsMargins(14, 14, 14, 14)
         side_layout.setSpacing(10)
@@ -123,6 +130,39 @@ class CoverageTab(QWidget):
         self.note_label.setWordWrap(True)
         self.note_label.setStyleSheet("color: palette(mid); font-size: 11px;")
         side_layout.addWidget(self.note_label)
+
+        manual_divider = QFrame(side)
+        manual_divider.setFrameShape(QFrame.Shape.HLine)
+        manual_divider.setFrameShadow(QFrame.Shadow.Sunken)
+        side_layout.addWidget(manual_divider)
+
+        manual_title = QLabel("Manuelle Datenbereitstellung", side)
+        manual_title.setStyleSheet("font-weight: 700;")
+        side_layout.addWidget(manual_title)
+
+        osm_path = html.escape(str(self.osm_directory))
+        elevation_path = html.escape(str(self.elevation_directory))
+        manual_help = QLabel(
+            "<b>OSM / Geofabrik</b><br>"
+            f"<a href='{GEOFABRIK_DOWNLOAD_URL}'>Geofabrik Download Server öffnen</a><br>"
+            "Auf der gewünschten Regionsseite die <code>.osm.pbf</code> und die dazugehörige "
+            "<code>.poly</code> herunterladen. Datiert benannte PBFs werden ebenfalls erkannt.<br>"
+            f"Speichern unter:<br><code>{osm_path}</code><br><br>"
+            "<b>Höhendaten / Copernicus DEM</b><br>"
+            f"<a href='{COPERNICUS_DEM_INFO_URL}'>Copernicus DEM Download-/Dateistruktur</a><br>"
+            f"<a href='{COPERNICUS_GLO30_TILE_LIST_URL}'>GLO-30 Kachelliste</a> · "
+            f"<a href='{COPERNICUS_GLO90_TILE_LIST_URL}'>GLO-90 Kachelliste</a><br>"
+            "Benötigte <code>Copernicus_DSM_COG_..._DEM.tif</code>-Kacheln unverändert kopieren nach:<br>"
+            f"<code>{elevation_path}</code>",
+            side,
+        )
+        manual_help.setTextFormat(Qt.TextFormat.RichText)
+        manual_help.setWordWrap(True)
+        manual_help.setOpenExternalLinks(True)
+        manual_help.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        side_layout.addWidget(manual_help)
         side_layout.addStretch(1)
 
         root_layout.addWidget(side)
