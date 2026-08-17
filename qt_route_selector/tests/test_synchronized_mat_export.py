@@ -93,9 +93,9 @@ class SynchronizedMatExportTests(unittest.TestCase):
         }
         self.assertTrue(variables)
 
-        # New hard MAT contract: there are no structs, scalar metadata, route
-        # arrays or event lists with another natural length. Every stored
-        # variable is exactly one finite N x 1 signal.
+        # Hard MAT contract: no structs, scalar metadata, route arrays or event
+        # lists with another natural length. Every stored variable is exactly
+        # one finite N x 1 signal.
         self.assertEqual({array.shape for array in variables.values()}, {(5, 1)})
         self.assertTrue(all(np.all(np.isfinite(array)) for array in variables.values()))
 
@@ -124,7 +124,10 @@ class SynchronizedMatExportTests(unittest.TestCase):
 
         np.testing.assert_allclose(variables["time_s"].ravel(), [0, 2, 4, 6, 8])
         np.testing.assert_allclose(variables["v_kmh"].ravel(), [0, 25, 31, 27, 0])
-        np.testing.assert_allclose(variables["elevation_m"].ravel(), [400.0, 403.0, 407.0, 409.8, 408.0])
+        np.testing.assert_allclose(
+            variables["elevation_m"].ravel(),
+            [400.0, 403.0, 406.75, 409.8, 408.0],
+        )
         np.testing.assert_allclose(
             variables["param_driver_hard_max_kmh"].ravel(),
             np.full(5, 140.0),
@@ -215,19 +218,38 @@ class SynchronizedMatExportTests(unittest.TestCase):
             self.assertTrue(all(row[3] == 0 for row in channel_rows))
             workbook.close()
 
-    def test_excel_refuses_stale_shorter_time_series_instead_of_padding_blanks(self) -> None:
+    def test_shorter_optional_power_series_is_filled_without_blanks(self) -> None:
         result, elevation, power = self._fixture()
         power = dict(power)
         power["total_kw"] = np.asarray([0.0, 12.0, 18.0, 7.0])
 
         with tempfile.TemporaryDirectory() as temporary_directory:
-            with self.assertRaisesRegex(ValueError, "p_total_kw"):
-                export_excel_simulation(
-                    result,
-                    Path(temporary_directory) / "broken.xlsx",
-                    power_data=power,
-                    elevation_m=elevation,
-                )
+            mat_path = export_matlab_simulation(
+                result,
+                Path(temporary_directory) / "filled.mat",
+                power_data=power,
+                elevation_m=elevation,
+            )
+            loaded = loadmat(mat_path)
+            total_power = np.asarray(loaded["p_total_kw"], dtype=float).reshape(-1)
+            self.assertEqual(total_power.size, 5)
+            self.assertTrue(np.all(np.isfinite(total_power)))
+            self.assertEqual(total_power[-1], 7.0)
+
+            excel_path = export_excel_simulation(
+                result,
+                Path(temporary_directory) / "filled.xlsx",
+                power_data=power,
+                elevation_m=elevation,
+            )
+            workbook = load_workbook(excel_path, read_only=True, data_only=True)
+            sheet = workbook["Simulation"]
+            headers = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
+            rows = list(sheet.iter_rows(min_row=2, values_only=True))
+            power_column = headers.index("p_total_kw")
+            self.assertEqual(rows[-1][power_column], 7.0)
+            self.assertTrue(all(row[power_column] is not None for row in rows))
+            workbook.close()
 
 
 if __name__ == "__main__":
