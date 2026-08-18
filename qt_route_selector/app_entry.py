@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -7,8 +8,30 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QMessageBox
 
 from . import complete_app as _complete_app
+from . import complete_app_base as _complete_app_base
+from . import coverage_tab as _coverage_tab
 from .elevation_persistence import resolve_elevation_source, save_route_elevation_source
+from .qtlocation_cache import prepared_qml_directory
 from .runtime_paths import data_dir, route_result_path
+
+
+# QtLocation's default OSM cache is a machine-wide GenericCacheLocation. Multiple
+# QtLocation instances (or other Qt map applications) may therefore manage the
+# same tile files. Give each map in this application its own app-owned cache and
+# load a generated QML copy with the official osm.mapping.cache.directory
+# parameter injected. The repository QML itself remains unchanged.
+_SOURCE_DIR = Path(__file__).resolve().parent
+_complete_app_base.APP_DIR = prepared_qml_directory(
+    _SOURCE_DIR / "main.qml",
+    "route-map",
+)
+_coverage_tab.APP_DIR = prepared_qml_directory(
+    _SOURCE_DIR / "coverage_map.qml",
+    "coverage-map",
+)
+# complete_app_base contains a historical top-level import for CoverageTab.
+# Reuse the already configured package module instead of loading a second copy.
+sys.modules.setdefault("coverage_tab", _coverage_tab)
 
 
 def _install_persistent_simulation_window() -> type:
