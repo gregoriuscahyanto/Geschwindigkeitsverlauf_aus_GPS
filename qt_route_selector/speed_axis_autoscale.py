@@ -219,6 +219,7 @@ class SpeedAxisAutoscaleMixin:
         "longitudinal_plot",
         "elevation_plot",
         "resistance_plot",
+        "load_collective_plot",
     )
 
     def _apply_ordinary_y_ranges(self) -> None:
