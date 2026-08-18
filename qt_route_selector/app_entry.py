@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtWidgets import QMessageBox
+
 from . import complete_app as _complete_app
 from .elevation_persistence import resolve_elevation_source, save_route_elevation_source
 from .runtime_paths import data_dir, route_result_path
@@ -103,9 +106,43 @@ class CompleteApplicationWindow(_complete_app.CompleteApplicationWindow):
                 setter(str(source))
 
     def _ensure_simulation_created(self) -> None:
+        """Create tab 2 from the final patched class, never from a legacy top-level shim."""
+        if self.speed_profile is not None or self._simulation_creating:
+            return
+        if self.tabs.currentIndex() != 1:
+            return
+
         self._restore_elevation_for_current_route()
-        _install_persistent_simulation_window()
-        super()._ensure_simulation_created()
+        simulation_type = _install_persistent_simulation_window()
+        self._simulation_creating = True
+        try:
+            # complete_app_base historically imports ``integrated_speed_profile_v3``
+            # as a top-level compatibility module. That can create a second,
+            # unpatched module instance and bypass the mixins installed above.
+            # Instantiate the returned final class directly so autoscaling,
+            # settings persistence, DEM restore and the current sidebar layout
+            # are guaranteed to be active in the visible simulation tab.
+            simulation = simulation_type(Path.cwd() / "route_result.json")
+            simulation.setWindowFlags(Qt.WindowType.Widget)
+            if self._pending_dem_file:
+                simulation.set_dem_path(self._pending_dem_file)
+            self.speed_profile = simulation
+            self.tabs.blockSignals(True)
+            try:
+                self.tabs.removeTab(1)
+                self.tabs.insertTab(1, simulation, "2 · Geschwindigkeitsverlauf")
+                self.tabs.setCurrentIndex(1)
+            finally:
+                self.tabs.blockSignals(False)
+        except Exception as exc:
+            QMessageBox.critical(self, "Simulation konnte nicht initialisiert werden", str(exc))
+            self.tabs.setCurrentIndex(0)
+            return
+        finally:
+            self._simulation_creating = False
+
+        if self._simulation_load_pending:
+            QTimer.singleShot(80, self._load_pending_simulation)
 
     def _elevation_finished(self, result: dict[str, Any]) -> None:
         super()._elevation_finished(result)
