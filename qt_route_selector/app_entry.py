@@ -18,6 +18,7 @@ def _install_persistent_simulation_window() -> type:
     from . import integrated_speed_profile as public_module
     from .simulation_settings import PersistentSimulationSettingsMixin
     from .simulation_ui_layout import SimulationUiLayoutMixin
+    from .speed_axis_autoscale import SpeedAxisAutoscaleMixin
 
     base_window = public_module.IntegratedSpeedProfileWindow
     if bool(getattr(base_window, "_route_app_extensions_installed", False)):
@@ -45,6 +46,7 @@ def _install_persistent_simulation_window() -> type:
     if issubclass(base_window, PersistentSimulationSettingsMixin):
 
         class PersistentIntegratedSpeedProfileWindow(
+            SpeedAxisAutoscaleMixin,
             SimulationUiLayoutMixin,
             RouteElevationRestoreMixin,
             base_window,
@@ -54,6 +56,7 @@ def _install_persistent_simulation_window() -> type:
     else:
 
         class PersistentIntegratedSpeedProfileWindow(
+            SpeedAxisAutoscaleMixin,
             SimulationUiLayoutMixin,
             PersistentSimulationSettingsMixin,
             RouteElevationRestoreMixin,
